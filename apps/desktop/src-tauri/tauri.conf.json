@@ -15,7 +15,8 @@
         "width": 900,
         "height": 680,
         "minWidth": 560,
-        "minHeight": 480
+        "minHeight": 480,
+        "visible": false
       }
     ],
     "security": {
@@ -24,7 +25,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "app",
+      "dmg",
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -34,6 +39,17 @@
     ],
     "macOS": {
       "signingIdentity": "-"
+    },
+    "shortDescription": "One Digital World",
+    "longDescription": "HENOS brings your Mac, Windows PC and phone together: copy on one device, paste on another. End-to-end encrypted, no account, no server.",
+    "category": "Utility",
+    "license": "Apache-2.0",
+    "homepage": "https://github.com/lovishmanchanda/HENOS",
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "windows/hooks.nsh"
+      }
     }
   }
 }

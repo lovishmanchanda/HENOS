@@ -16,7 +16,11 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Emitter, Manager, RunEvent, State, WindowEvent, Wry,
 };
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
 use tracing::{error, info};
+
+/// Passed when HENOS is started at login, so it opens without a window.
+const HIDDEN_FLAG: &str = "--hidden";
 
 /// Event sent to the window whenever it should fetch a fresh state.
 const STATE_CHANGED: &str = "state-changed";
@@ -147,21 +151,47 @@ fn build_tray(app: &AppHandle) -> tauri::Result<CheckMenuItem<Wry>> {
         false,
         None::<&str>,
     )?;
+    // Off until the person turns it on: HENOS does not add itself to the
+    // login items on its own.
+    let autostart_on = app.autolaunch().is_enabled().unwrap_or(false);
+    let autostart = CheckMenuItem::with_id(
+        app,
+        "autostart",
+        "Start HENOS at login",
+        true,
+        autostart_on,
+        None::<&str>,
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit HENOS", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &pause, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &pause, &autostart, &separator, &quit])?;
+    let autostart_item = autostart.clone();
 
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("HENOS")
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| match event.id.as_ref() {
+        .on_menu_event(move |app, event| match event.id.as_ref() {
             "open" => show_main_window(app),
             "pause" => {
                 let running = app.state::<Running>();
                 let paused = !running.henos.clipboard_paused();
                 running.henos.set_clipboard_paused(paused);
                 let _ = running.pause_item.set_checked(paused);
+            }
+            "autostart" => {
+                let launcher = app.autolaunch();
+                let enable = !launcher.is_enabled().unwrap_or(false);
+                let changed = if enable {
+                    launcher.enable()
+                } else {
+                    launcher.disable()
+                };
+                if let Err(e) = changed {
+                    error!("could not change the start-at-login setting: {e}");
+                }
+                // Show what is actually set, whether or not the change worked.
+                let _ = autostart_item.set_checked(launcher.is_enabled().unwrap_or(false));
             }
             "quit" => quit_app(app),
             _ => {}
@@ -192,10 +222,26 @@ fn main() {
         .init();
 
     let app = tauri::Builder::default()
+        // Opening HENOS a second time brings up the window of the copy that
+        // is already running instead of starting another one. Must be the
+        // first plugin registered.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(app);
+        }))
+        // When started at login HENOS gets this flag and stays in the tray.
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            Some(vec![HIDDEN_FLAG]),
+        ))
         .setup(|app| {
             if let Err(e) = start(app.handle()) {
                 error!("HENOS could not start: {e}");
                 return Err(e.into());
+            }
+            // The window is created hidden; show it unless we were started
+            // at login.
+            if !std::env::args().any(|arg| arg == HIDDEN_FLAG) {
+                show_main_window(app.handle());
             }
             Ok(())
         })

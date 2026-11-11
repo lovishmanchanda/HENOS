@@ -53,7 +53,24 @@ npm install
 npm run dev
 ```
 
-`npm run build` makes an installable app in `target/release/bundle`.
+`npm run build` makes the installer for the system you are on, in
+`target/release/bundle`: a `.dmg` on macOS, a setup `.exe` on Windows.
+
+Installers for both systems are also built on GitHub: pushing a version tag
+such as `v0.1.0` (or running the Release workflow by hand) produces a draft
+release with them attached.
+
+Good to know about the installers today:
+
+- They are not signed with a paid developer certificate yet. macOS will say the
+  app is from an unidentified developer (right-click the app and choose Open
+  the first time), and Windows SmartScreen will warn before running the setup.
+- The Windows setup asks for administrator rights once. It uses them to add a
+  firewall rule that lets your other devices reach HENOS on private networks,
+  and removes the rule again on uninstall.
+- "Start HENOS at login" is a switch in the tray menu, off until you turn it
+  on. Started that way, HENOS stays in the tray without opening its window.
+- There are no automatic updates yet.
 
 The window lists paired devices, shows a pairing code and QR, and lets you
 enter another device's code. Closing the window keeps HENOS running in the
