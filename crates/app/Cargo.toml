@@ -1,0 +1,18 @@
+[package]
+name = "henos-app"
+description = "What every HENOS app shares above the core: one object holding state, pairing and activity for a UI to show"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+henos-core.workspace = true
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.54.1", features = ["rt", "sync", "time", "macros"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+serde_json = "1.0.154"
+tempfile = "3.27.0"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }

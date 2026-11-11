@@ -1,0 +1,148 @@
+# HENOS
+
+**One Digital World.**
+
+HENOS brings your devices together into one seamless, unified ecosystem. Mac,
+Windows PC, Android or iOS: the boundaries between them should not be your
+problem. Copy on one device and paste on another today; files, folders and
+more to come. It is open source and end-to-end encrypted, with no account, no
+server and no network setup.
+
+## The name
+
+HENOS comes from the Greek philosophical idea of *henosis* (ἕνωσις): unity,
+union, the state of becoming one. That is the whole vision. HENOS is not just a
+clipboard or file-sharing utility; it is one connected digital world in which
+all your devices work together as parts of a single environment. Different
+devices, one experience, without boundaries.
+
+**Status:** on a local network, devices find each other, pair with a 6-digit
+code, keep an encrypted connection to the devices they are paired with, and
+share copied text over it. There is a first desktop app for macOS (Windows not
+yet built or tested) and a developer tool. The Android app is not built yet. The full design and roadmap are in
+[docs/PLAN.md](docs/PLAN.md).
+
+## Layout
+
+```
+crates/core               shared Rust library: identity, discovery, transport, pairing, sync
+crates/app                what every app shares above the core: state, pairing, activity
+crates/clipboard-desktop  system clipboard access for Windows, macOS and Linux
+crates/cli                headless dev/test tool (binary name: henos)
+apps/desktop              Tauri app for Windows and macOS (window, tray, clipboard)
+apps/android              Kotlin app (not created yet)
+```
+
+## Build
+
+Requires Rust (stable), installed with [rustup](https://rustup.rs).
+
+```bash
+cargo test --workspace
+```
+
+## The desktop app
+
+Needs Node.js as well as Rust. From `apps/desktop`:
+
+```bash
+npm install
+```
+
+```bash
+npm run dev
+```
+
+`npm run build` makes an installable app in `target/release/bundle`.
+
+The window lists paired devices, shows a pairing code and QR, and lets you
+enter another device's code. Closing the window keeps HENOS running in the
+tray so the clipboard stays shared; quit from the tray menu, which also has a
+switch to pause clipboard sharing.
+
+By default the app keeps its key and paired-device list in the system's app
+data folder. Set `HENOS_DATA_DIR` to use another folder, and
+`HENOS_DEVICE_NAME` to choose the name other devices see.
+
+To work on the interface without building the app, serve `apps/desktop` with
+any static file server and open `dev/preview.html`, which runs the real
+interface against fake data.
+
+## Try it: two simulated devices on one computer
+
+Each simulated device keeps its key and paired-device list in its own data
+folder. Use two terminals.
+
+Terminal 1 shows a pairing code and waits:
+
+```bash
+cargo run -q -p henos-cli -- --data-dir target/dev-nodes/a --name "Node A" pair show
+```
+
+Terminal 2 joins with that code:
+
+```bash
+cargo run -q -p henos-cli -- --data-dir target/dev-nodes/b --name "Node B" pair join --code <code>
+```
+
+Now run both. They find each other, connect and report a ping:
+
+```bash
+cargo run -q -p henos-cli -- --data-dir target/dev-nodes/a --name "Node A" run
+```
+
+```bash
+cargo run -q -p henos-cli -- --data-dir target/dev-nodes/b --name "Node B" run
+```
+
+Other commands: `devices` lists paired devices, `unpair <name>` forgets one.
+Add `--verbose` to any command for debug logs.
+
+## Try it: shared clipboard
+
+Two simulated devices on one computer would share the one real clipboard, so
+for that case each uses a text file as its clipboard. Saving the file is a
+"copy"; received text is written to it. Add this to each `run` command, with a
+different file per device:
+
+```bash
+cargo run -q -p henos-cli -- --data-dir target/dev-nodes/a --name "Node A" run --clipboard-file target/dev-nodes/a.clip
+```
+
+Then write some text to one file and watch it appear in the other.
+
+On two real computers, share the real clipboard instead:
+
+```bash
+cargo run -q -p henos-cli -- --data-dir target/dev-nodes/a run --clipboard
+```
+
+How the shared clipboard behaves:
+
+- Text only for now, up to 1 MB. Images come later.
+- A device shares with the devices it is paired with directly. Nothing is
+  passed on to a third device, so pair every device with every other.
+- Only new copies travel; connecting does not send what is already there.
+- Content that a password manager marks as secret is never shared.
+- The tool prints sizes and device names, never the copied text.
+
+## How pairing stays safe
+
+- The code is never sent over the network. Both devices prove they know it
+  using SPAKE2, so someone listening learns nothing.
+- A code is good for one pairing and one wrong guess, and expires after two
+  minutes. A wrong guess discards it.
+- Pairing is tied to both devices' keys, so a device relaying between the two
+  cannot pair in their place.
+- After pairing, a device only talks to keys on its paired list. Unpairing on
+  one device makes the other forget it too.
+
+## Open to everyone
+
+HENOS is free and open source, and it is open to everyone: use it, read the
+code, report problems, suggest ideas, or send changes. Issues and pull requests
+are welcome.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).

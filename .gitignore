@@ -1,0 +1,29 @@
+# Rust
+/target/
+
+# Node / Tauri frontend
+node_modules/
+dist/
+
+# Android
+.gradle/
+local.properties
+*.apk
+*.aab
+apps/android/**/build/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local data and secrets
+*.key
+.env
+
+# Tauri generated files
+apps/desktop/src-tauri/gen/
+
+# Local tool settings
+.claude/

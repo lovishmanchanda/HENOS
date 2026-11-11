@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/app",
+    "crates/clipboard-desktop",
+    "crates/cli",
+    "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+# Dependencies are added per milestone, with versions checked against current
+# docs at the time (see docs/PLAN.md). Nothing external is needed for the
+# scaffold itself.
+[workspace.dependencies]
+henos-core = { path = "crates/core" }
+henos-app = { path = "crates/app" }
+henos-clipboard-desktop = { path = "crates/clipboard-desktop" }
