@@ -246,6 +246,11 @@ pub struct ClipboardSync {
     node: Arc<Node>,
     backend: Arc<dyn ClipboardBackend>,
     state: Mutex<SyncState>,
+    /// Held while a received item is being put on the system clipboard and
+    /// while a local copy is being stamped, so the two never interleave. A
+    /// copy made just as an item arrives is then always ordered after it,
+    /// and what the clipboard holds matches what the other devices hold.
+    order: tokio::sync::Mutex<()>,
     events: broadcast::Sender<ClipboardEvent>,
     task: Mutex<Option<JoinHandle<()>>>,
 }
@@ -264,6 +269,7 @@ impl ClipboardSync {
             node: node.clone(),
             backend,
             state: Mutex::default(),
+            order: tokio::sync::Mutex::new(()),
             events,
             task: Mutex::new(None),
         });
@@ -310,6 +316,7 @@ impl ClipboardSync {
         }
 
         let fingerprint = content.fingerprint();
+        let ordered = self.order.lock().await;
         let stamp = {
             let mut state = self.state.lock().unwrap();
             if state.fingerprint == Some(fingerprint) {
@@ -322,6 +329,7 @@ impl ClipboardSync {
             state.fingerprint = Some(fingerprint);
             stamp
         };
+        drop(ordered);
 
         let bytes = content.len();
         let item = Arc::new(ClipboardItem {
@@ -341,6 +349,7 @@ impl ClipboardSync {
         // Pull back stamps from clocks running far ahead of ours.
         let stamp = item.stamp.min(now_ms().saturating_add(MAX_STAMP_LEAD_MS));
         let key = (stamp, *item.origin.as_bytes());
+        let _ordered = self.order.lock().await;
         {
             let mut state = self.state.lock().unwrap();
             if state.current.is_some_and(|current| key <= current) {

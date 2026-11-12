@@ -133,8 +133,12 @@ async fn pair_share_pause_and_unpair_as_a_user_would() {
     let entry = &desk_state.activity[0].text;
     assert!(entry.contains("Laptop") && entry.contains("12 bytes"));
     assert!(!entry.contains("meeting"));
-    let laptop_state = laptop.state();
-    assert_eq!(laptop_state.activity[0].kind, ActivityKind::ClipboardSent);
+    until(&laptop, "laptop logged the send", |s| {
+        s.activity
+            .first()
+            .is_some_and(|a| a.kind == ActivityKind::ClipboardSent)
+    })
+    .await;
 
     // Paused: nothing goes out and nothing comes in.
     desk.set_clipboard_paused(true);

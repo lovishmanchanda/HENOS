@@ -20,6 +20,8 @@ const WAIT: Duration = Duration::from_secs(10);
 #[derive(Default)]
 struct FakeClipboard {
     writes: Mutex<Vec<String>>,
+    /// What the clipboard holds: the latest of a local copy or a write.
+    held: Mutex<Option<String>>,
 }
 
 impl FakeClipboard {
@@ -35,7 +37,10 @@ impl FakeClipboard {
 impl ClipboardBackend for FakeClipboard {
     fn write(&self, content: &ClipboardContent) -> Result<(), String> {
         match content {
-            ClipboardContent::Text(text) => self.writes.lock().unwrap().push(text.clone()),
+            ClipboardContent::Text(text) => {
+                self.writes.lock().unwrap().push(text.clone());
+                *self.held.lock().unwrap() = Some(text.clone());
+            }
             _ => return Err("unsupported content".into()),
         }
         Ok(())
@@ -51,6 +56,11 @@ struct Device {
 
 impl Device {
     async fn copy(&self, text: &str) -> LocalCopy {
+        // As on a real device: the text is on the clipboard first, then the
+        // platform reports it.
+        if !text.is_empty() {
+            *self.clipboard.held.lock().unwrap() = Some(text.to_owned());
+        }
         self.sync
             .local_copy(ClipboardContent::Text(text.to_owned()))
             .await
@@ -240,13 +250,24 @@ async fn simultaneous_copies_converge_on_one_item() {
         let (sent_a, sent_b) = tokio::join!(a.copy(&text_a), b.copy(&text_b));
         assert_eq!(sent_a, LocalCopy::Sent { devices: 1 });
         assert_eq!(sent_b, LocalCopy::Sent { devices: 1 });
-        tokio::time::sleep(Duration::from_millis(200)).await;
-
-        // Exactly one side adopted the other's item; they did not swap.
-        let final_a = a.clipboard.current().unwrap_or(text_a.clone());
-        let final_b = b.clipboard.current().unwrap_or(text_b.clone());
-        assert_eq!(final_a, final_b, "devices disagree in round {round}");
-        assert_eq!(a.clipboard.write_count() + b.clipboard.write_count(), 1);
+        // However the two copies interleave, both devices end up holding
+        // the same text; they never swap.
+        let held = |d: &Device| d.clipboard.held.lock().unwrap().clone();
+        let agreed = timeout(WAIT, async {
+            while held(a) != held(b) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(
+            agreed.is_ok(),
+            "devices disagree in round {round}: {:?} vs {:?}",
+            held(a),
+            held(b)
+        );
+        // And it stays that way.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert_eq!(held(a), held(b), "devices drifted apart in round {round}");
 
         shutdown(devices).await;
     }
