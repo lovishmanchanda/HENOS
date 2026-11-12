@@ -1,0 +1,6 @@
+.gradle/
+build/
+local.properties
+# Built from the Rust core by build-rust scripts; not checked in.
+app/src/main/jniLibs/
+*.apk

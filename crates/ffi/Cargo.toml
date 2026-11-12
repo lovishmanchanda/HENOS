@@ -1,0 +1,27 @@
+[package]
+name = "henos-ffi"
+description = "Bindings that let the Android app (Kotlin) use the HENOS app layer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "henos_ffi"
+crate-type = ["cdylib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+# Only for the binding generator, never for the library shipped in the app.
+cli = ["uniffi/cli"]
+
+[dependencies]
+henos-app.workspace = true
+henos-core.workspace = true
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+uniffi = "0.32"

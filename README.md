@@ -16,10 +16,10 @@ clipboard or file-sharing utility; it is one connected digital world in which
 all your devices work together as parts of a single environment. Different
 devices, one experience, without boundaries.
 
-**Status:** on a local network, devices find each other, pair with a 6-digit
-code, keep an encrypted connection to the devices they are paired with, and
-share copied text over it. There is a first desktop app for macOS (Windows not
-yet built or tested) and a developer tool. The Android app is not built yet. The full design and roadmap are in
+**Status:** on a local network, any number of your devices find each other,
+pair with a 6-digit code or a QR code, keep an encrypted connection to the
+devices they are paired with, and share copied text. There are apps for macOS,
+Windows and Android, and a developer tool. The full design and roadmap are in
 [docs/PLAN.md](docs/PLAN.md).
 
 ## Layout
@@ -30,7 +30,8 @@ crates/app                what every app shares above the core: state, pairing, 
 crates/clipboard-desktop  system clipboard access for Windows, macOS and Linux
 crates/cli                headless dev/test tool (binary name: henos)
 apps/desktop              Tauri app for Windows and macOS (window, tray, clipboard)
-apps/android              Kotlin app (not created yet)
+crates/ffi                bindings that let the Android app use the Rust code
+apps/android              Android app (Kotlin, Jetpack Compose)
 ```
 
 ## Build
@@ -85,6 +86,46 @@ To work on the interface without building the app, serve `apps/desktop` with
 any static file server and open `dev/preview.html`, which runs the real
 interface against fake data.
 
+## The Android app
+
+In `apps/android`. It pairs by scanning the QR code a computer shows, by typing
+a 6-digit code, or by showing a code itself.
+
+- Text copied on a paired device arrives on the phone's clipboard while the
+  HENOS notification is showing.
+- Android does not let apps read the clipboard in the background, so sending
+  from the phone takes one tap: "Send my clipboard" on the HENOS notification,
+  or Share then "Send to my devices" from any app.
+- After the phone restarts, open HENOS once to reconnect.
+
+To build it you need Android Studio (SDK, NDK and command-line tools), Rust
+with the Android targets, and `cargo-ndk`:
+
+```bash
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+```
+
+```bash
+cargo install cargo-ndk
+```
+
+Then, from `apps/android`, build the Rust core for phones and the app. On
+macOS or Linux:
+
+```bash
+./build-rust.sh && ./gradlew assembleDebug
+```
+
+On Windows, `setup-gradle.cmd` (once), then `build-rust.cmd` and
+`build-apk.cmd`. The app file ends up in `app/build/outputs/apk/debug`.
+
+The Kotlin file under `app/src/main/java/uniffi` is generated from
+`crates/ffi`. After changing that crate, regenerate it:
+
+```bash
+cargo build -p henos-ffi && cargo run -p henos-ffi --features cli --bin uniffi-bindgen -- generate --library target/debug/libhenos_ffi.dylib --language kotlin --no-format --out-dir apps/android/app/src/main/java
+```
+
 ## Try it: two simulated devices on one computer
 
 Each simulated device keeps its key and paired-device list in its own data
@@ -138,7 +179,8 @@ How the shared clipboard behaves:
 
 - Text only for now, up to 1 MB. Images come later.
 - A device shares with the devices it is paired with directly. Nothing is
-  passed on to a third device, so pair every device with every other.
+  passed on to another device, so pair each device with every other device
+  it should share with. There is no limit on how many devices you pair.
 - Only new copies travel; connecting does not send what is already there.
 - Content that a password manager marks as secret is never shared.
 - The tool prints sizes and device names, never the copied text.

@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.Henos" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <style name="Theme.Henos.Transparent" parent="android:Theme.Translucent.NoTitleBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+</resources>

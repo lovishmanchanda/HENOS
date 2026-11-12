@@ -27,3 +27,7 @@ apps/desktop/src-tauri/gen/
 
 # Local tool settings
 .claude/
+
+# Local build tooling
+.gradle-home/
+.gradle-dist/

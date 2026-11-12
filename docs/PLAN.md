@@ -1,12 +1,13 @@
-# HENOS plan: open-source cross-device ecosystem (Windows + macOS + Android)
+# HENOS plan: an open-source ecosystem across all your devices
 
 Name: **HENOS**, from the Greek *henosis* (unity). Tagline: One Digital World.
 
 ## Context
 
-You work across a Windows PC, a Mac and an Android phone and want what Apple's
+You work across several devices (Windows PCs, Macs, Android phones, in any
+number and mix) and want what Apple's
 ecosystem gives (shared clipboard, files, using another device's camera), but
-open source, end-to-end encrypted, and working across all three. It must also be
+open source, end-to-end encrypted, and working across all of them. It must also be
 something other people can install and use with almost no setup: no account, no
 server, no network configuration.
 
@@ -31,7 +32,7 @@ henos/
   apps/
     desktop/   Tauri v2 (Rust backend + small TypeScript UI), tray app for Win + Mac
     android/   Kotlin + Jetpack Compose, foreground service, loads core via UniFFI
-  .github/workflows/   CI: test + build installers for all three platforms
+  .github/workflows/   CI: test + build installers for every platform
 ```
 
 ### Proven parts we build on
