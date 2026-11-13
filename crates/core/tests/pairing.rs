@@ -400,3 +400,64 @@ async fn one_way_discovery_is_repaired_by_a_greeting() {
     joiner.shutdown().await;
     stranger.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_beacon_makes_both_devices_see_each_other() {
+    let beacon_node = |name: &'static str| async move {
+        let device = DeviceInfo {
+            name: name.to_owned(),
+            platform: Platform::current(),
+        };
+        let mut config = NodeConfig::new(
+            Identity::generate(),
+            device,
+            Arc::new(TrustStore::in_memory()),
+        );
+        config.discovery = false;
+        config.auto_connect = false;
+        // A private port, so the test does not hear real devices nearby.
+        config.beacon_port = Some(0);
+        Node::spawn(config).await.expect("node starts")
+    };
+    let desk = beacon_node("Desk").await;
+    let laptop = beacon_node("Laptop").await;
+    let (mut desk_events, mut laptop_events) = (desk.subscribe(), laptop.subscribe());
+    let to_loopback =
+        |node: &Node| SocketAddr::from((Ipv4Addr::LOCALHOST, node.beacon_addr().unwrap().port()));
+
+    // One packet from Desk to Laptop. Laptop answers, so both learn of each
+    // other even though only one of them "announced".
+    desk.beacon_to(to_loopback(&laptop)).await.unwrap();
+    wait_for(
+        &mut laptop_events,
+        |e| matches!(e, NodeEvent::NearbyFound(d) if d.id == desk.id() && d.device.name == "Desk"),
+    )
+    .await;
+    wait_for(
+        &mut desk_events,
+        |e| matches!(e, NodeEvent::NearbyFound(d) if d.id == laptop.id()),
+    )
+    .await;
+
+    // What they learned is enough to pair by code, with no other discovery.
+    let offer = desk.start_pairing();
+    desk.beacon_to(to_loopback(&laptop)).await.unwrap();
+    wait_for(
+        &mut laptop_events,
+        |e| matches!(e, NodeEvent::NearbyFound(d) if d.id == desk.id() && d.pairing),
+    )
+    .await;
+    let paired = laptop.pair_with_code(desk.id(), &offer.code).await.unwrap();
+    assert_eq!(paired.device.name, "Desk");
+
+    // Junk sent to the beacon port is ignored.
+    let junk = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    junk.send_to(b"not a beacon", to_loopback(&desk))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(desk.nearby().len(), 1);
+
+    desk.shutdown().await;
+    laptop.shutdown().await;
+}

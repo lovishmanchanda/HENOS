@@ -343,6 +343,7 @@ function choosePanel() {
           onclick: () => {
             ui.panel = "join";
             ui.error = "";
+            lookNow();
             render();
           },
         },
@@ -367,6 +368,7 @@ function devices() {
         onclick: () => {
           ui.panel = "choose";
           ui.error = "";
+          lookNow();
           render();
         },
       },
@@ -444,5 +446,12 @@ function showStartupError(error) {
     .replaceChildren(h("p", { class: "error", role: "alert" }, "HENOS could not start: " + String(error)));
 }
 
+/** Asks the Rust side to search for devices right now. */
+function lookNow() {
+  invoke("look_now").catch(() => {});
+}
+
 listen("state-changed", refresh);
+// Coming back to the window is a good moment to look for devices.
+window.addEventListener("focus", lookNow);
 refresh().catch(showStartupError);

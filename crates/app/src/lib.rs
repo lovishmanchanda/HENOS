@@ -374,6 +374,12 @@ impl App {
         Ok(())
     }
 
+    /// Looks for devices right away. Call when the person opens the app or
+    /// the pairing screen, so they do not wait for the next routine check.
+    pub fn look_now(&self) {
+        self.node.look_now();
+    }
+
     /// Pauses or resumes clipboard sharing in both directions.
     pub fn set_clipboard_paused(&self, paused: bool) {
         self.paused.store(paused, Ordering::Relaxed);

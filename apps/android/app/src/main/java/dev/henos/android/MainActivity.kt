@@ -85,6 +85,12 @@ class MainActivity : ComponentActivity() {
         HenosService.start(this)
         setContent { HenosTheme { App() } }
     }
+
+    override fun onResume() {
+        super.onResume()
+        // Opening the app is a good moment to look for devices.
+        kotlin.concurrent.thread(name = "henos-look") { HenosCore.run { it.lookNow() } }
+    }
 }
 
 // The same quiet, paper-like look as the desktop app: one accent colour,
@@ -389,7 +395,11 @@ private fun Devices(
             else -> Row(
                 Modifier
                     .fillMaxWidth()
-                    .clickable(role = Role.Button) { onMessage(null); panel = Panel.Choose }
+                    .clickable(role = Role.Button) {
+                        onMessage(null)
+                        panel = Panel.Choose
+                        act { it.lookNow() }
+                    }
                     .heightIn(min = 56.dp)
                     .padding(horizontal = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,

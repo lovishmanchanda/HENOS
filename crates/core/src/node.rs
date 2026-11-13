@@ -31,6 +31,7 @@ use tokio::{
 use tracing::{debug, info, warn};
 
 use crate::{
+    beacon::{self, Beacon, BEACON_PORT},
     clipboard::{self, ClipboardHeader, ClipboardItem},
     device::{sanitize_name, DeviceInfo, Platform},
     error::{Error, Result},
@@ -67,11 +68,23 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_HELLO_FRAME: usize = 1024;
 /// A device known only from its greetings is forgotten after this long
 /// without a new one.
-const GREETING_TTL: Duration = Duration::from_secs(45);
+const GREETING_TTL: Duration = Duration::from_secs(65);
 /// How often we re-check whether a device that said it sees us still does.
 const GREETING_RECHECK: Duration = Duration::from_secs(60);
 /// Most devices remembered from greetings alone.
 const MAX_GREETED_DEVICES: usize = 64;
+/// Beacons go out in a quick burst when HENOS starts or the person is
+/// looking for devices, then settle to this slow rhythm.
+const BEACON_BURST: [Duration; 5] = [
+    Duration::from_millis(0),
+    Duration::from_millis(400),
+    Duration::from_millis(1200),
+    Duration::from_secs(3),
+    Duration::from_secs(6),
+];
+const BEACON_IDLE_INTERVAL: Duration = Duration::from_secs(20);
+/// At most one answer to the same device within this time.
+const BEACON_REPLY_GAP: Duration = Duration::from_secs(1);
 /// How long a replaced connection is kept open for the other side to close.
 const REPLACED_LINGER: Duration = Duration::from_secs(10);
 
@@ -100,6 +113,11 @@ pub struct NodeConfig {
     pub auto_connect: bool,
     /// How long a pairing code stays valid.
     pub pairing_code_ttl: Duration,
+    /// UDP port for beacons, HENOS's own discovery; `None` turns them off
+    /// and 0 picks a free port. With `discovery` off, the standard port is
+    /// not opened either, so isolated nodes stay isolated; only another
+    /// port (as tests use) is.
+    pub beacon_port: Option<u16>,
 }
 
 impl NodeConfig {
@@ -113,6 +131,7 @@ impl NodeConfig {
             discovery: true,
             auto_connect: true,
             pairing_code_ttl: CODE_TTL,
+            beacon_port: Some(BEACON_PORT),
         }
     }
 }
@@ -173,6 +192,7 @@ pub struct Node {
     shared: Arc<Shared>,
     router: Router,
     discovery_task: Option<JoinHandle<()>>,
+    beacon_tasks: Vec<JoinHandle<()>>,
 }
 
 struct Shared {
@@ -187,6 +207,12 @@ struct Shared {
     nearby: Mutex<HashMap<DeviceId, NearbyEntry>>,
     dialing: Mutex<HashSet<DeviceId>>,
     greetings: Mutex<HashMap<DeviceId, GreetState>>,
+    /// The beacon socket, when beacons are on.
+    beacon: Option<Arc<tokio::net::UdpSocket>>,
+    /// Wakes the beacon sender for an immediate burst.
+    beacon_boost: tokio::sync::Notify,
+    /// When we last answered each device's beacon.
+    beacon_replies: Mutex<HashMap<DeviceId, Instant>>,
     /// The code currently on offer, if we are in pairing mode.
     offer: Mutex<Option<Offer>>,
     /// Bumped whenever pairing mode is started or stopped by the user.
@@ -279,6 +305,20 @@ impl Node {
             .await
             .map_err(|e| Error::Bind(e.to_string()))?;
 
+        let beacon_port = if config.discovery {
+            config.beacon_port
+        } else {
+            config.beacon_port.filter(|port| *port != BEACON_PORT)
+        };
+        let beacon_socket = beacon_port.and_then(|port| match beacon::bind(port) {
+            Ok(socket) => Some(Arc::new(socket)),
+            Err(e) => {
+                // Not fatal: the other ways of finding devices still work.
+                warn!("could not open the beacon port: {e}");
+                None
+            }
+        });
+
         let (events, _) = broadcast::channel(256);
         let shared = Arc::new(Shared {
             id,
@@ -292,6 +332,9 @@ impl Node {
             nearby: Mutex::default(),
             dialing: Mutex::default(),
             greetings: Mutex::default(),
+            beacon: beacon_socket,
+            beacon_boost: tokio::sync::Notify::new(),
+            beacon_replies: Mutex::default(),
             offer: Mutex::default(),
             offer_generation: AtomicU64::new(0),
             events,
@@ -334,8 +377,17 @@ impl Node {
             None
         };
 
+        let mut beacon_tasks = Vec::new();
+        if shared.beacon.is_some() {
+            beacon_tasks.push(tokio::spawn(receive_beacons(shared.clone())));
+            if config.discovery {
+                beacon_tasks.push(tokio::spawn(send_beacons(shared.clone())));
+            }
+        }
+
         info!(id = %id.fmt_short(), "node started");
         Ok(Self {
+            beacon_tasks,
             shared,
             router,
             discovery_task,
@@ -486,6 +538,22 @@ impl Node {
         Ok(removed)
     }
 
+    /// Looks for devices right now instead of waiting for the next routine
+    /// check. Call when the person opens the app or starts pairing.
+    pub fn look_now(&self) {
+        self.shared.beacon_boost.notify_one();
+    }
+
+    /// The address beacons are received on, if beacons are on.
+    pub fn beacon_addr(&self) -> Option<SocketAddr> {
+        self.shared.beacon.as_ref()?.local_addr().ok()
+    }
+
+    /// Sends one beacon straight to `addr` (another device's beacon address).
+    pub async fn beacon_to(&self, addr: SocketAddr) -> Result<()> {
+        send_beacon(&self.shared, addr, false).await
+    }
+
     /// Tells the device at `addrs` that we are here, so that it lists us as
     /// nearby even if it cannot hear our network announcements. Returns
     /// whether it could already see us.
@@ -603,6 +671,9 @@ impl Node {
     /// Closes every connection and stops the node.
     pub async fn shutdown(&self) {
         if let Some(task) = &self.discovery_task {
+            task.abort();
+        }
+        for task in &self.beacon_tasks {
             task.abort();
         }
         let conns: Vec<Connection> = {
@@ -902,6 +973,16 @@ async fn open_session(
         Registered::New => {
             info!(peer = %remote.fmt_short(), name = %peer.device.name, "connected");
             shared.emit(NodeEvent::PeerConnected(peer.clone()));
+            // Remember where it was, to reconnect next time without searching.
+            let addrs = {
+                let nearby = shared.nearby.lock().unwrap();
+                nearby.get(&remote).map(|e| e.device.addrs.clone())
+            };
+            if let Some(addrs) = addrs {
+                if let Err(e) = shared.trust.remember_addrs(&remote, addrs) {
+                    debug!("could not save the device's address: {e}");
+                }
+            }
         }
         Registered::Replaced => {
             debug!(peer = %remote.fmt_short(), "connection replaced");
@@ -1329,6 +1410,7 @@ fn start_discovery(shared: Arc<Shared>) -> Result<JoinHandle<()>> {
     announce(&shared);
 
     Ok(tokio::spawn(async move {
+        knock_on_absent_devices(&shared).await;
         let mut events = mdns.subscribe().await;
         let mut retry = tokio::time::interval(RECONNECT_INTERVAL);
         retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1412,10 +1494,204 @@ fn start_discovery(shared: Arc<Shared>) -> Result<JoinHandle<()>> {
                         maybe_greet(&shared, id);
                     }
                     forget_silent_greeters(&shared);
+                    knock_on_absent_devices(&shared).await;
                 }
             }
         }
     }))
+}
+
+/// Our own beacon, as bytes.
+fn our_beacon(shared: &Shared, is_reply: bool) -> Vec<u8> {
+    let port = shared
+        .endpoint
+        .bound_sockets()
+        .into_iter()
+        .find(SocketAddr::is_ipv4)
+        .map_or(0, |a| a.port());
+    Beacon::new(
+        *shared.id.as_bytes(),
+        port,
+        encode_announcement(&shared.device, shared.is_pairing()),
+        is_reply,
+    )
+    .encode()
+}
+
+async fn send_beacon(shared: &Shared, to: SocketAddr, is_reply: bool) -> Result<()> {
+    let Some(socket) = &shared.beacon else {
+        return Err(Error::Connect("beacons are off".into()));
+    };
+    socket.send_to(&our_beacon(shared, is_reply), to).await?;
+    Ok(())
+}
+
+/// Announces us to the whole local network: a quick burst at first and
+/// whenever asked, then a slow routine.
+async fn send_beacons(shared: Arc<Shared>) {
+    loop {
+        for wait in BEACON_BURST {
+            tokio::time::sleep(wait).await;
+            broadcast_beacon(&shared).await;
+        }
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(BEACON_IDLE_INTERVAL) => broadcast_beacon(&shared).await,
+                // Something changed or someone is looking: burst again.
+                _ = shared.beacon_boost.notified() => break,
+            }
+        }
+    }
+}
+
+async fn broadcast_beacon(shared: &Shared) {
+    let local = shared
+        .endpoint
+        .addr()
+        .ip_addrs()
+        .filter_map(|a| match a.ip() {
+            std::net::IpAddr::V4(ip) => Some(ip),
+            std::net::IpAddr::V6(_) => None,
+        })
+        .collect::<Vec<_>>();
+    for target in beacon::broadcast_targets(local, BEACON_PORT) {
+        if let Err(e) = send_beacon(shared, target, false).await {
+            debug!("could not send a beacon to {target}: {e}");
+        }
+    }
+}
+
+/// Listens for other devices' beacons and answers each sender directly.
+async fn receive_beacons(shared: Arc<Shared>) {
+    let Some(socket) = shared.beacon.clone() else {
+        return;
+    };
+    let mut packet = [0u8; beacon::MAX_BEACON_BYTES + 1];
+    loop {
+        let (len, from) = match socket.recv_from(&mut packet).await {
+            Ok(received) => received,
+            Err(e) => {
+                debug!("beacon socket error: {e}");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+        };
+        let Some(heard) = Beacon::decode(&packet[..len]) else {
+            continue;
+        };
+        let Ok(id) = DeviceId::from_bytes(&heard.id) else {
+            continue;
+        };
+        if id == shared.id {
+            continue;
+        }
+        let Some((device, pairing)) = decode_announcement(&heard.announcement) else {
+            continue;
+        };
+        // The packet says which port; where it came from says which address.
+        let addr = SocketAddr::new(from.ip(), heard.port);
+        note_direct(&shared, id, device, pairing, vec![addr]);
+
+        if !heard.is_reply {
+            let due = {
+                let mut replies = shared.beacon_replies.lock().unwrap();
+                if replies.len() > 256 {
+                    replies.retain(|_, at| at.elapsed() < BEACON_REPLY_GAP);
+                }
+                let due = replies
+                    .get(&id)
+                    .is_none_or(|at| at.elapsed() >= BEACON_REPLY_GAP);
+                if due {
+                    replies.insert(id, Instant::now());
+                }
+                due
+            };
+            if due {
+                let _ = send_beacon(&shared, from, true).await;
+            }
+        }
+    }
+}
+
+/// Records a device that told us directly (by beacon) that it is here.
+fn note_direct(
+    shared: &Arc<Shared>,
+    id: DeviceId,
+    device: DeviceInfo,
+    pairing: bool,
+    addrs: Vec<SocketAddr>,
+) {
+    let changed = {
+        let mut nearby = shared.nearby.lock().unwrap();
+        match nearby.get_mut(&id) {
+            Some(entry) => {
+                entry.greeted_at = Some(Instant::now());
+                let mut changed = entry.device.device != device || entry.device.pairing != pairing;
+                entry.device.device = device;
+                entry.device.pairing = pairing;
+                for addr in addrs {
+                    if !entry.device.addrs.contains(&addr) {
+                        entry.device.addrs.push(addr);
+                        entry.addr = entry.addr.clone().with_ip_addr(addr);
+                        changed = true;
+                    }
+                }
+                changed.then(|| entry.device.clone())
+            }
+            None => {
+                let direct_only = nearby.values().filter(|e| !e.via_mdns).count();
+                if direct_only >= MAX_GREETED_DEVICES {
+                    return;
+                }
+                let found = NearbyDevice {
+                    id,
+                    device,
+                    trusted: shared.trust.is_trusted(&id),
+                    pairing,
+                    addrs: addrs.clone(),
+                };
+                let mut addr = EndpointAddr::new(id);
+                for a in addrs {
+                    addr = addr.with_ip_addr(a);
+                }
+                nearby.insert(
+                    id,
+                    NearbyEntry {
+                        device: found.clone(),
+                        addr,
+                        via_mdns: false,
+                        greeted_at: Some(Instant::now()),
+                    },
+                );
+                Some(found)
+            }
+        }
+    };
+    if let Some(device) = changed {
+        shared.emit(NodeEvent::NearbyFound(device));
+    }
+    maybe_dial(shared, id);
+}
+
+/// Sends a beacon straight to the last known address of each paired device
+/// that is neither connected nor visible. If it is still there it answers,
+/// and we reconnect without any searching.
+async fn knock_on_absent_devices(shared: &Arc<Shared>) {
+    if shared.beacon.is_none() {
+        return;
+    }
+    for record in shared.trust.list() {
+        let visible = shared.nearby.lock().unwrap().contains_key(&record.id);
+        if visible || shared.peer(&record.id).is_some() {
+            continue;
+        }
+        for addr in shared.trust.last_addrs(&record.id) {
+            if addr.is_ipv4() {
+                let target = SocketAddr::new(addr.ip(), BEACON_PORT);
+                let _ = send_beacon(shared, target, false).await;
+            }
+        }
+    }
 }
 
 /// Drops devices we only knew from greetings that have stopped arriving.
@@ -1679,6 +1955,8 @@ fn announce(shared: &Arc<Shared>) {
         Err(e) => warn!("could not announce device details: {e}"),
     }
     greet_everyone(shared);
+    // And tell the network at once, so the change is seen without delay.
+    shared.beacon_boost.notify_one();
 }
 
 /// The local-network announcement: `1|platform|flags|name`, where flags is

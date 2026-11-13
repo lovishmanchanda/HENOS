@@ -725,6 +725,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_henos_ffi_checksum_method_henos_copy_text(
     ): Int
+    external fun uniffi_henos_ffi_checksum_method_henos_look_now(
+    ): Int
     external fun uniffi_henos_ffi_checksum_method_henos_pair_with_code(
     ): Int
     external fun uniffi_henos_ffi_checksum_method_henos_pair_with_ticket(
@@ -788,6 +790,8 @@ internal object UniffiLib {
     external fun uniffi_henos_ffi_fn_constructor_henos_start(`dataDir`: RustBuffer.ByValue,`deviceName`: RustBuffer.ByValue,`clipboard`: Long,`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_henos_ffi_fn_method_henos_copy_text(`ptr`: Long,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_henos_ffi_fn_method_henos_look_now(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_henos_ffi_fn_method_henos_pair_with_code(`ptr`: Long,`deviceId`: RustBuffer.ByValue,`code`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -931,6 +935,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_henos_ffi_checksum_method_henos_copy_text() and 0xFFFF) != 36093) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_henos_ffi_checksum_method_henos_look_now() and 0xFFFF) != 46194) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_henos_ffi_checksum_method_henos_pair_with_code() and 0xFFFF) != 5760) {
@@ -1970,6 +1977,11 @@ public interface HenosInterface {
     fun `copyText`(`text`: kotlin.String)
     
     /**
+     * Looks for devices right away, for when the app comes on screen.
+     */
+    fun `lookNow`()
+    
+    /**
      * Pairs with a nearby device showing `code`. Blocks until done.
      */
     fun `pairWithCode`(`deviceId`: kotlin.String, `code`: kotlin.String)
@@ -2119,6 +2131,21 @@ open class Henos: Disposable, AutoCloseable, HenosInterface
         it,
         
         FfiConverterString.lower(`text`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Looks for devices right away, for when the app comes on screen.
+     */override fun `lookNow`()
+        = 
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_henos_ffi_fn_method_henos_look_now(
+        it,
+        _status)
 }
     }
     

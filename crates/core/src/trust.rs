@@ -6,6 +6,7 @@
 use std::{
     collections::HashMap,
     fs,
+    net::SocketAddr,
     path::{Path, PathBuf},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
@@ -56,6 +57,8 @@ pub(crate) fn unix_now() -> u64 {
 pub struct TrustStore {
     path: Option<PathBuf>,
     devices: Mutex<HashMap<DeviceId, PairedDevice>>,
+    /// Where each paired device was last reached.
+    addrs: Mutex<HashMap<DeviceId, Vec<SocketAddr>>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -70,6 +73,9 @@ struct StoredDevice {
     name: String,
     platform: String,
     paired_at: u64,
+    /// Where the device was last reached. A hint for reconnecting quickly.
+    #[serde(default)]
+    addrs: Vec<String>,
 }
 
 impl TrustStore {
@@ -78,6 +84,7 @@ impl TrustStore {
         Self {
             path: None,
             devices: Mutex::default(),
+            addrs: Mutex::default(),
         }
     }
 
@@ -103,6 +110,7 @@ impl TrustStore {
         Self {
             path: None,
             devices: Mutex::new(devices),
+            addrs: Mutex::default(),
         }
     }
 
@@ -113,14 +121,15 @@ impl TrustStore {
     /// everything.
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self> {
         let path = data_dir.as_ref().join(FILE_NAME);
-        let devices = match fs::read(&path) {
+        let (devices, addrs) = match fs::read(&path) {
             Ok(bytes) => parse(&bytes, &path)?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Default::default(),
             Err(e) => return Err(e.into()),
         };
         Ok(Self {
             path: Some(path),
             devices: Mutex::new(devices),
+            addrs: Mutex::new(addrs),
         })
     }
 
@@ -164,14 +173,43 @@ impl TrustStore {
         if devices.remove(id).is_none() {
             return Ok(false);
         }
+        self.addrs.lock().unwrap().remove(id);
         self.save(&devices)?;
         Ok(true)
+    }
+
+    /// Where a paired device was last reached, if known.
+    pub fn last_addrs(&self, id: &DeviceId) -> Vec<SocketAddr> {
+        self.addrs
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Remembers where a paired device was reached, for reconnecting without
+    /// searching. Does nothing for devices that are not paired.
+    pub fn remember_addrs(&self, id: &DeviceId, addrs: Vec<SocketAddr>) -> Result<()> {
+        let devices = self.devices.lock().unwrap();
+        if addrs.is_empty() || !devices.contains_key(id) {
+            return Ok(());
+        }
+        {
+            let mut known = self.addrs.lock().unwrap();
+            if known.get(id) == Some(&addrs) {
+                return Ok(());
+            }
+            known.insert(*id, addrs);
+        }
+        self.save(&devices)
     }
 
     fn save(&self, devices: &HashMap<DeviceId, PairedDevice>) -> Result<()> {
         let Some(path) = &self.path else {
             return Ok(());
         };
+        let addrs = self.addrs.lock().unwrap();
         let mut stored: Vec<StoredDevice> = devices
             .values()
             .map(|d| StoredDevice {
@@ -179,8 +217,13 @@ impl TrustStore {
                 name: d.device.name.clone(),
                 platform: d.device.platform.as_str().to_owned(),
                 paired_at: d.paired_at,
+                addrs: addrs
+                    .get(&d.id)
+                    .map(|list| list.iter().map(ToString::to_string).collect())
+                    .unwrap_or_default(),
             })
             .collect();
+        drop(addrs);
         stored.sort_by(|a, b| (a.paired_at, &a.id).cmp(&(b.paired_at, &b.id)));
         let file = StoredFile {
             version: FILE_VERSION,
@@ -193,13 +236,19 @@ impl TrustStore {
     }
 }
 
-fn parse(bytes: &[u8], path: &Path) -> Result<HashMap<DeviceId, PairedDevice>> {
+type Parsed = (
+    HashMap<DeviceId, PairedDevice>,
+    HashMap<DeviceId, Vec<SocketAddr>>,
+);
+
+fn parse(bytes: &[u8], path: &Path) -> Result<Parsed> {
     let corrupt = |why: String| Error::CorruptTrustStore(format!("{}: {why}", path.display()));
     let file: StoredFile = serde_json::from_slice(bytes).map_err(|e| corrupt(e.to_string()))?;
     if file.version != FILE_VERSION {
         return Err(corrupt(format!("unsupported version {}", file.version)));
     }
     let mut devices = HashMap::new();
+    let mut addrs = HashMap::new();
     for stored in file.devices {
         let id: DeviceId = stored
             .id
@@ -210,6 +259,11 @@ fn parse(bytes: &[u8], path: &Path) -> Result<HashMap<DeviceId, PairedDevice>> {
             platform: Platform::parse(&stored.platform),
         }
         .sanitized();
+        // Addresses are only hints: skip any that cannot be read.
+        let known: Vec<SocketAddr> = stored.addrs.iter().filter_map(|a| a.parse().ok()).collect();
+        if !known.is_empty() {
+            addrs.insert(id, known);
+        }
         devices.insert(
             id,
             PairedDevice {
@@ -219,7 +273,7 @@ fn parse(bytes: &[u8], path: &Path) -> Result<HashMap<DeviceId, PairedDevice>> {
             },
         );
     }
-    Ok(devices)
+    Ok((devices, addrs))
 }
 
 #[cfg(test)]
@@ -258,6 +312,26 @@ mod tests {
         let store = TrustStore::open(dir.path()).unwrap();
         assert!(!store.is_trusted(&phone.id));
         assert!(store.is_trusted(&laptop.id));
+    }
+
+    #[test]
+    fn last_addresses_are_remembered_for_paired_devices_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let phone = device("Phone");
+        let stranger = Identity::generate().id();
+        let addr: SocketAddr = "192.168.1.20:5000".parse().unwrap();
+        {
+            let store = TrustStore::open(dir.path()).unwrap();
+            store.add(phone.clone()).unwrap();
+            store.remember_addrs(&phone.id, vec![addr]).unwrap();
+            store.remember_addrs(&stranger, vec![addr]).unwrap();
+            assert!(store.last_addrs(&stranger).is_empty());
+        }
+        let store = TrustStore::open(dir.path()).unwrap();
+        assert_eq!(store.last_addrs(&phone.id), vec![addr]);
+        // Forgotten together with the pairing.
+        store.remove(&phone.id).unwrap();
+        assert!(store.last_addrs(&phone.id).is_empty());
     }
 
     #[test]

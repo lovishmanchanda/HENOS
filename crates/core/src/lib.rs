@@ -7,12 +7,14 @@
 //! - [`trust`]: the saved list of paired devices
 //! - [`pairing`]: how two devices come to trust each other, by code or QR
 //! - [`protocol`]: the messages two paired devices exchange
+//! - [`beacon`]: HENOS's own announce-and-answer discovery
 //! - [`node`]: discovery on the local network and encrypted connections
 //! - [`clipboard`]: shared clipboard between paired devices
 //!
 //! Platform shells (Tauri, Android) stay thin: they supply the clipboard, the
 //! keychain and the UI, and call into this crate for the rest.
 
+pub mod beacon;
 pub mod clipboard;
 pub mod device;
 pub mod error;

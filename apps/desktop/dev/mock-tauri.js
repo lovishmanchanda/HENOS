@@ -74,6 +74,7 @@
       fake.activity.unshift({ atMs: Date.now(), kind: "unpaired", text: "No longer paired with " + device.name });
       notify();
     },
+    look_now() {},
     set_clipboard_paused({ paused }) {
       fake.clipboardPaused = paused;
       notify();

@@ -75,6 +75,12 @@ async fn unpair(running: State<'_, Running>, device_id: String) -> Result<(), St
 }
 
 #[tauri::command]
+async fn look_now(running: State<'_, Running>) -> Result<(), String> {
+    running.henos.look_now();
+    Ok(())
+}
+
+#[tauri::command]
 async fn set_clipboard_paused(running: State<'_, Running>, paused: bool) -> Result<(), String> {
     running.henos.set_clipboard_paused(paused);
     // Keep the tray checkbox in step with the window.
@@ -261,6 +267,7 @@ fn main() {
             pair_with_ticket,
             unpair,
             set_clipboard_paused,
+            look_now,
         ])
         .build(tauri::generate_context!())
         .expect("error while building the HENOS app");

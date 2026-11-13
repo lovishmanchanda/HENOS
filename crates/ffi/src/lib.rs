@@ -133,6 +133,11 @@ impl Henos {
         Ok(())
     }
 
+    /// Looks for devices right away, for when the app comes on screen.
+    pub fn look_now(&self) {
+        self.app.look_now();
+    }
+
     pub fn set_clipboard_paused(&self, paused: bool) {
         self.app.set_clipboard_paused(paused);
     }
