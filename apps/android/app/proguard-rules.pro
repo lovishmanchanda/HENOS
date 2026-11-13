@@ -4,3 +4,7 @@
 -keep class * implements com.sun.jna.** { *; }
 -keep class uniffi.** { *; }
 -dontwarn java.awt.**
+
+# The QR scanner's parts are created by name at run time.
+-keep class * implements com.google.firebase.components.ComponentRegistrar { <init>(); }
+-keep class com.google.mlkit.** { <init>(); }

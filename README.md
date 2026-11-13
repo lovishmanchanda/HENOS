@@ -17,9 +17,11 @@ all your devices work together as parts of a single environment. Different
 devices, one experience, without boundaries.
 
 **Status:** on a local network, any number of your devices find each other,
-pair with a 6-digit code or a QR code, keep an encrypted connection to the
-devices they are paired with, and share copied text. There are apps for macOS,
-Windows and Android, and a developer tool. The full design and roadmap are in
+pair with a 6-digit code or a QR code, and keep an encrypted connection to the
+devices they are paired with. Over it they share what you copy (text
+everywhere, images between computers) and send each other files, which the
+receiving person accepts or declines. There are apps for macOS, Windows and
+Android, and a developer tool. The full design and roadmap are in
 [docs/PLAN.md](docs/PLAN.md).
 
 ## Layout
@@ -183,13 +185,43 @@ cargo run -q -p henos-cli -- --data-dir target/dev-nodes/a run --clipboard
 
 How the shared clipboard behaves:
 
-- Text only for now, up to 1 MB. Images come later.
+- Text up to 1 MB. Copied images up to 10 MB, between computers; phones
+  share images as files for now.
 - A device shares with the devices it is paired with directly. Nothing is
   passed on to another device, so pair each device with every other device
   it should share with. There is no limit on how many devices you pair.
 - Only new copies travel; connecting does not send what is already there.
 - Content that a password manager marks as secret is never shared.
 - The tool prints sizes and device names, never the copied text.
+
+## Sending files
+
+In the apps: the Send file button next to a connected device, dragging a file
+onto a device in the desktop window, or Share then "Send to my devices" on
+Android.
+
+- The other person is asked first. Nothing is saved until they accept.
+- Accepted files go to a HENOS folder inside Downloads. An existing file is
+  never overwritten; the new one gets a number added.
+- A device cannot make another save a file anywhere else: the name it sends
+  is reduced to a plain file name.
+- Files travel over the same encrypted connection as everything else.
+
+With the developer tool, `run --send <file>` offers a file to each paired
+device as it connects, and `run --receive-into <folder>` accepts everything.
+
+## How devices find each other
+
+Two ways at once, so that one failing does not matter:
+
+- Standard network discovery (mDNS).
+- HENOS's own beacons: a device announces itself to the local network on UDP
+  port 47474 and every HENOS device that hears it answers directly. This
+  still works when announcements only get through in one direction.
+
+Beacons go out in a quick burst when HENOS starts or you open it, then one
+every 20 seconds. Paired devices also remember each other's last address and
+try it directly.
 
 ## How pairing stays safe
 

@@ -31,3 +31,6 @@ apps/desktop/src-tauri/gen/
 # Local build tooling
 .gradle-home/
 .gradle-dist/
+
+# The Android signing key and its password. Never commit these.
+signing/
