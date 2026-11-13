@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 
@@ -21,3 +21,11 @@ license = "Apache-2.0"
 henos-core = { path = "crates/core" }
 henos-app = { path = "crates/app" }
 henos-clipboard-desktop = { path = "crates/clipboard-desktop" }
+
+# Release builds favour small, lean programs: they are installed on every
+# device and run all day.
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true

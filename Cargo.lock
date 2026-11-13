@@ -2190,7 +2190,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
 name = "henos-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "henos-core",
  "qrcode",
@@ -2203,7 +2203,7 @@ dependencies = [
 
 [[package]]
 name = "henos-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2216,7 +2216,7 @@ dependencies = [
 
 [[package]]
 name = "henos-clipboard-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clipboard-rs",
  "henos-core",
@@ -2225,7 +2225,7 @@ dependencies = [
 
 [[package]]
 name = "henos-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "blake3",
  "gethostname",
@@ -2246,7 +2246,7 @@ dependencies = [
 
 [[package]]
 name = "henos-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "henos-app",
  "henos-clipboard-desktop",
@@ -2264,7 +2264,7 @@ dependencies = [
 
 [[package]]
 name = "henos-ffi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "henos-app",
  "henos-core",

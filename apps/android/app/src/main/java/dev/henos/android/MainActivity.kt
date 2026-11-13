@@ -22,19 +22,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -57,6 +60,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.Role
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
@@ -76,23 +87,45 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private val Blue = Color(0xFF2A5FE6)
-private val Green = Color(0xFF14853D)
-private val Amber = Color(0xFFA15C00)
-private val Grey = Color(0xFF9AA1B0)
+// The same quiet, paper-like look as the desktop app: one accent colour,
+// grouped rounded lists, nothing decorative.
+private val LightColors = lightColorScheme(
+    primary = Color(0xFF2A5FE6),
+    onPrimary = Color.White,
+    background = Color(0xFFF5F4F0),
+    surface = Color.White,
+    onBackground = Color(0xFF1B1B1F),
+    onSurface = Color(0xFF1B1B1F),
+    onSurfaceVariant = Color(0xFF6D6D76),
+    outline = Color(0xFFA2A2AB),
+    outlineVariant = Color(0x14141E1E),
+    error = Color(0xFFCF3A3A),
+    surfaceVariant = Color(0xFFF5F4F0),
+)
+private val DarkColors = darkColorScheme(
+    primary = Color(0xFF7EA2FF),
+    onPrimary = Color(0xFF0C1326),
+    background = Color(0xFF161618),
+    surface = Color(0xFF212124),
+    onBackground = Color(0xFFF2F2F4),
+    onSurface = Color(0xFFF2F2F4),
+    onSurfaceVariant = Color(0xFFA0A0AA),
+    outline = Color(0xFF6C6C76),
+    outlineVariant = Color(0x14FFFFFF),
+    error = Color(0xFFFF7A7A),
+    surfaceVariant = Color(0xFF161618),
+)
+private val Ok = Color(0xFF1F9D55)
+private val Wait = Color(0xFFC98A1B)
 
 @Composable
 private fun HenosTheme(content: @Composable () -> Unit) {
-    val colors = if (isSystemInDarkTheme()) {
-        darkColorScheme(primary = Color(0xFF6F95FF))
-    } else {
-        lightColorScheme(primary = Blue)
-    }
+    val colors: ColorScheme = if (isSystemInDarkTheme()) DarkColors else LightColors
     MaterialTheme(colorScheme = colors, content = content)
 }
 
-/** Which panel of "Add a device" is open. */
-private enum class Panel { None, Join }
+/** Which part of "Add a device" is open. */
+private enum class Panel { Closed, Choose, Join }
 
 @Composable
 private fun App() {
@@ -105,14 +138,14 @@ private fun App() {
             Modifier
                 .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(horizontal = 18.dp, vertical = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(22.dp),
         ) {
             val current = state
             when {
                 current != null -> Content(current)
                 startError != null -> ErrorText("HENOS could not start: $startError")
-                else -> Text("Starting HENOS…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else -> Text("Starting…", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -145,127 +178,185 @@ private fun Content(state: UiState) {
         }
     }
 
-    Header(state) { paused -> act { it.setClipboardPaused(paused) } }
-    PairedList(state.paired) { id -> act { it.unpair(id) } }
-    AddDevice(state, message, onMessage = { message = it }, act = ::act)
-    Activity(state.activity)
+    Top(state) { paused -> act { it.setClipboardPaused(paused) } }
+    Devices(state, message, onMessage = { message = it }, act = ::act)
+    Recent(state.activity)
     Text(
-        "HENOS ${state.version} · One Digital World",
+        "HENOS ${state.version} · One Digital World · end-to-end encrypted",
         Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        color = MaterialTheme.colorScheme.outline,
         style = MaterialTheme.typography.bodySmall,
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
     )
 }
 
 @Composable
-private fun Header(state: UiState, onPause: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                state.deviceName,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Text(
-                if (state.clipboardPaused) "Clipboard sharing paused" else "Clipboard sharing on",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        Switch(checked = !state.clipboardPaused, onCheckedChange = { onPause(!it) })
+private fun Eyebrow(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text.uppercase(),
+        modifier,
+        color = MaterialTheme.colorScheme.outline,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        letterSpacing = 0.8.sp,
+    )
+}
+
+private fun summary(state: UiState): String {
+    if (state.clipboardPaused) return "Sharing is paused"
+    val connected = state.paired.count { it.connected }
+    return when {
+        state.paired.isEmpty() -> "Add a device to start sharing"
+        connected == 0 -> "None of your devices are nearby"
+        connected == 1 -> "Sharing with 1 device"
+        else -> "Sharing with $connected devices"
     }
 }
 
 @Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+private fun Top(state: UiState, onPause: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.Bottom) {
+        Column(Modifier.weight(1f)) {
+            Eyebrow("This phone")
             Text(
-                title.uppercase(),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                state.deviceName,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = (-0.5).sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            content()
+            Text(summary(state), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        Switch(
+            checked = !state.clipboardPaused,
+            onCheckedChange = { onPause(!it) },
+            colors = SwitchDefaults.colors(checkedTrackColor = Ok, checkedThumbColor = Color.White),
+        )
     }
+}
+
+/** A titled group whose rows sit on one rounded sheet. */
+@Composable
+private fun Group(title: String, content: @Composable () -> Unit) {
+    Column {
+        Eyebrow(title, Modifier.padding(start = 14.dp, bottom = 7.dp))
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.surface),
+        ) { content() }
+    }
+}
+
+@Composable
+private fun Hairline(inset: Dp = 52.dp) {
+    Box(
+        Modifier
+            .padding(start = inset)
+            .fillMaxWidth()
+            .height(1.dp)
+            .background(MaterialTheme.colorScheme.outlineVariant),
+    )
 }
 
 @Composable
 private fun Dot(color: Color) {
-    Box(Modifier.size(9.dp).clip(CircleShape).background(color))
+    Box(Modifier.size(7.dp).clip(CircleShape).background(color))
 }
 
-private fun platformName(platform: String) = when (platform) {
-    "macos" -> "Mac"
-    "windows" -> "Windows PC"
-    "linux" -> "Linux PC"
-    "android" -> "Android"
-    "ios" -> "iPhone or iPad"
-    else -> "Device"
-}
-
+/** A small line drawing of a phone or a computer. */
 @Composable
-private fun PairedList(paired: List<PairedDevice>, onUnpair: (String) -> Unit) {
-    var confirming by remember { mutableStateOf<String?>(null) }
-    Section("Your devices") {
-        if (paired.isEmpty()) {
-            Text("No devices paired yet. Add one below.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        paired.forEachIndexed { index, device ->
-            if (index > 0) HorizontalDivider()
-            val (color, label) = when {
-                device.connected -> Green to "Connected"
-                device.nearby -> Amber to "Nearby, connecting"
-                else -> Grey to "Not on this network"
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(device.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Dot(color)
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "${platformName(device.platform)} · $label",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                }
-                if (confirming == device.id) {
-                    TextButton(onClick = { confirming = null; onUnpair(device.id) }) {
-                        Text("Unpair", color = MaterialTheme.colorScheme.error)
-                    }
-                    TextButton(onClick = { confirming = null }) { Text("Keep") }
-                } else {
-                    TextButton(onClick = { confirming = device.id }) { Text("Unpair") }
-                }
-            }
+private fun DeviceGlyph(platform: String, tint: Color) {
+    val phone = platform == "android" || platform == "ios"
+    Canvas(Modifier.size(24.dp)) {
+        val stroke = Stroke(width = 1.6.dp.toPx(), cap = StrokeCap.Round)
+        val u = size.width / 24f
+        if (phone) {
+            drawRoundRect(tint, Offset(7 * u, 3 * u), Size(10 * u, 18 * u), CornerRadius(2.5f * u), stroke)
+            drawLine(tint, Offset(11 * u, 18 * u), Offset(13 * u, 18 * u), stroke.width, StrokeCap.Round)
+        } else {
+            drawRoundRect(tint, Offset(4 * u, 5 * u), Size(16 * u, 11 * u), CornerRadius(2 * u), stroke)
+            drawLine(tint, Offset(2.5f * u, 19.5f * u), Offset(21.5f * u, 19.5f * u), stroke.width, StrokeCap.Round)
         }
     }
 }
 
 @Composable
-private fun AddDevice(
+private fun DeviceLine(
+    name: String,
+    platform: String,
+    dot: Color,
+    status: String,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    trailing: @Composable () -> Unit = {},
+) {
+    Row(
+        modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        DeviceGlyph(platform, tint)
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Dot(dot)
+                Spacer(Modifier.width(6.dp))
+                Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+            }
+        }
+        trailing()
+    }
+}
+
+@Composable
+private fun Devices(
     state: UiState,
     message: String?,
     onMessage: (String?) -> Unit,
     act: ((uniffi.henos_ffi.Henos) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
-    var panel by remember { mutableStateOf(Panel.None) }
+    var panel by remember { mutableStateOf(Panel.Closed) }
+    var confirming by remember { mutableStateOf<String?>(null) }
+    val faint = MaterialTheme.colorScheme.outline
 
-    Section("Add a device") {
+    Group("Devices") {
+        state.paired.forEach { device ->
+            val (dot, label) = when {
+                device.connected -> Ok to "Connected"
+                device.nearby -> Wait to "Connecting"
+                else -> faint to "Not nearby"
+            }
+            DeviceLine(device.name, device.platform, dot, label) {
+                if (confirming == device.id) {
+                    TextButton(onClick = { confirming = null; act { it.unpair(device.id) } }) {
+                        Text("Unpair", color = MaterialTheme.colorScheme.error)
+                    }
+                    TextButton(onClick = { confirming = null }) { Text("Keep") }
+                } else {
+                    TextButton(onClick = { confirming = device.id }) { Text("Unpair", color = faint) }
+                }
+            }
+            Hairline()
+        }
+
         val offer = state.pairing
         when {
-            offer != null -> ShowCode(offer) { act { it.stopPairing() } }
+            offer != null -> Padded { ShowCode(offer) { act { it.stopPairing() } } }
             panel == Panel.Join -> JoinPanel(
                 state.nearby,
+                message,
                 onPair = { id, code -> act { it.pairWithCode(id, code) } },
-                onCancel = { panel = Panel.None; onMessage(null) },
+                onCancel = { panel = Panel.Closed; onMessage(null) },
             )
-            else -> {
+            panel == Panel.Choose -> Padded {
+                Text(
+                    "Scan the code a computer shows, or pair with a 6-digit code.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Button(
                     onClick = {
                         onMessage(null)
@@ -286,27 +377,68 @@ private fun AddDevice(
                             }
                     },
                     modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
                 ) { Text("Scan a QR code") }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { onMessage(null); panel = Panel.Join }, Modifier.weight(1f)) {
-                        Text("Enter a code")
-                    }
-                    OutlinedButton(onClick = { onMessage(null); act { it.startPairing() } }, Modifier.weight(1f)) {
-                        Text("Show a code")
-                    }
+                    QuietButton("Enter a code", Modifier.weight(1f)) { onMessage(null); panel = Panel.Join }
+                    QuietButton("Show a code", Modifier.weight(1f)) { onMessage(null); act { it.startPairing() } }
                 }
+                TextButton(onClick = { panel = Panel.Closed; onMessage(null) }) { Text("Cancel", color = faint) }
+                if (message != null) ErrorText(message)
+            }
+            else -> Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(role = Role.Button) { onMessage(null); panel = Panel.Choose }
+                    .heightIn(min = 56.dp)
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                PlusGlyph(MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(14.dp))
+                Text("Add a device", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
             }
         }
-        if (message != null) ErrorText(message)
+        // A pairing that just succeeded closes the panel.
+        LaunchedEffect(state.paired.size) { panel = Panel.Closed }
     }
 
-    // Tick the countdown while a code is on show.
+    // The only timer: ticking the countdown while a code is on show.
     LaunchedEffect(state.pairing != null) {
         while (state.pairing != null) {
             delay(1000)
             HenosCore.refresh()
         }
     }
+}
+
+@Composable
+private fun PlusGlyph(tint: Color) {
+    Canvas(Modifier.size(24.dp)) {
+        val u = size.width / 24f
+        val w = 1.8.dp.toPx()
+        drawCircle(tint, 9 * u, style = Stroke(w))
+        drawLine(tint, Offset(12 * u, 8 * u), Offset(12 * u, 16 * u), w, StrokeCap.Round)
+        drawLine(tint, Offset(8 * u, 12 * u), Offset(16 * u, 12 * u), w, StrokeCap.Round)
+    }
+}
+
+@Composable
+private fun Padded(content: @Composable () -> Unit) {
+    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { content() }
+}
+
+@Composable
+private fun QuietButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        modifier = modifier,
+        shape = RoundedCornerShape(10.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.background,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ),
+    ) { Text(label) }
 }
 
 @Composable
@@ -322,21 +454,23 @@ private fun ShowCode(offer: PairingOffer, onCancel: () -> Unit) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
     Text(
-        "Works once. Expires in %d:%02d.".format(offer.secondsLeft / 60, offer.secondsLeft % 60),
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        style = MaterialTheme.typography.bodySmall,
+        "Works once · expires in %d:%02d".format(offer.secondsLeft / 60, offer.secondsLeft % 60),
+        color = MaterialTheme.colorScheme.outline,
+        fontSize = 13.sp,
     )
-    OutlinedButton(onClick = onCancel) { Text("Cancel") }
+    QuietButton("Cancel", onClick = onCancel)
 }
 
 @Composable
 private fun JoinPanel(
     nearby: List<NearbyDevice>,
+    message: String?,
     onPair: (id: String, code: String) -> Unit,
     onCancel: () -> Unit,
 ) {
     var selected by remember { mutableStateOf<String?>(null) }
     var code by remember { mutableStateOf("") }
+    val faint = MaterialTheme.colorScheme.outline
 
     // Keep a sensible choice as devices come and go.
     if (nearby.none { it.id == selected }) {
@@ -348,60 +482,65 @@ private fun JoinPanel(
         }
     }
 
-    if (nearby.isEmpty()) {
-        Text(
-            "No other HENOS device found on this network yet. Open HENOS on the other device, then choose Show a code there.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
     nearby.forEach { device ->
-        Row(
-            Modifier.fillMaxWidth().clickable { selected = device.id },
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            RadioButton(selected = device.id == selected, onClick = { selected = device.id })
-            Column {
-                Text(device.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    platformName(device.platform) +
-                        if (device.pairing) " · showing a code" else " · not showing a code yet",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
+        val chosen = device.id == selected
+        DeviceLine(
+            device.name,
+            device.platform,
+            if (device.pairing) Ok else faint,
+            if (device.pairing) "Showing a code" else "Not showing a code yet",
+            modifier = Modifier
+                .background(
+                    if (chosen) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else Color.Transparent,
                 )
-            }
-        }
+                .clickable(role = Role.RadioButton) { selected = device.id },
+            tint = if (chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Hairline()
     }
-    OutlinedTextField(
-        value = code,
-        onValueChange = { typed -> code = typed.filter { it.isDigit() }.take(6) },
-        label = { Text("6-digit code") },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(
-            onClick = { selected?.let { onPair(it, code) } },
-            enabled = selected != null && code.length == 6,
-        ) { Text("Pair") }
-        OutlinedButton(onClick = onCancel) { Text("Cancel") }
+    Padded {
+        if (nearby.isEmpty()) {
+            Text(
+                "No other HENOS device found on this network yet. Open HENOS on the other device and choose Show a code.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        OutlinedTextField(
+            value = code,
+            onValueChange = { typed -> code = typed.filter { it.isDigit() }.take(6) },
+            label = { Text("6-digit code") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = { selected?.let { onPair(it, code) } },
+                enabled = selected != null && code.length == 6,
+                shape = RoundedCornerShape(10.dp),
+            ) { Text("Pair") }
+            QuietButton("Cancel", onClick = onCancel)
+        }
+        if (message != null) ErrorText(message)
     }
 }
 
 @Composable
-private fun Activity(entries: List<ActivityEntry>) {
+private fun Recent(entries: List<ActivityEntry>) {
     if (entries.isEmpty()) return
     val time = remember { DateFormat.getTimeInstance(DateFormat.SHORT) }
-    Section("Recent activity") {
-        entries.take(10).forEach { entry ->
-            Row {
+    Group("Recent") {
+        entries.take(8).forEachIndexed { index, entry ->
+            if (index > 0) Hairline(inset = 14.dp)
+            Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                 Text(
                     time.format(Date(entry.atMs)),
-                    Modifier.width(72.dp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
+                    Modifier.width(70.dp),
+                    color = MaterialTheme.colorScheme.outline,
+                    fontSize = 13.sp,
                 )
-                Text(entry.text, style = MaterialTheme.typography.bodyMedium)
+                Text(entry.text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
             }
         }
     }
@@ -409,5 +548,13 @@ private fun Activity(entries: List<ActivityEntry>) {
 
 @Composable
 private fun ErrorText(text: String) {
-    Text(text, color = MaterialTheme.colorScheme.error)
+    Text(
+        text,
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(MaterialTheme.colorScheme.error.copy(alpha = 0.10f))
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        color = MaterialTheme.colorScheme.error,
+    )
 }

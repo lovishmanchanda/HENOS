@@ -11,13 +11,44 @@ android {
         applicationId = "dev.henos.android"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+        ndk {
+            // Real phones only; emulator-only chip types are left out.
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    // Release builds are signed with the project's own key when one is
+    // supplied through the environment (as the release workflow does).
+    // Without one they fall back to the local debug key, so the build still
+    // installs, but such builds cannot update one another across machines.
+    val keystorePath = System.getenv("HENOS_KEYSTORE")
+    signingConfigs {
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("HENOS_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("HENOS_KEY_ALIAS")
+                keyPassword = System.getenv("HENOS_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // The bindings library ships loaders for chip types Android phones
+            // do not use.
+            excludes += listOf("lib/armeabi/**", "lib/mips/**", "lib/mips64/**", "lib/x86/**", "lib/x86_64/**")
         }
     }
 

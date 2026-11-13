@@ -57,7 +57,8 @@ npm run dev
 `npm run build` makes the installer for the system you are on, in
 `target/release/bundle`: a `.dmg` on macOS, a setup `.exe` on Windows.
 
-Installers for both systems are also built on GitHub: pushing a version tag
+Installers for macOS (Apple silicon), Windows and Android are also built on
+GitHub: pushing a version tag
 such as `v0.1.0` (or running the Release workflow by hand) produces a draft
 release with them attached.
 
@@ -72,6 +73,11 @@ Good to know about the installers today:
 - "Start HENOS at login" is a switch in the tray menu, off until you turn it
   on. Started that way, HENOS stays in the tray without opening its window.
 - There are no automatic updates yet.
+- Intel Macs are not built for.
+- The Android app is installed from its `.apk` file (your phone will ask you
+  to allow installing from the browser or file manager). Until the project's
+  signing key is set up in the repository, each release is signed with a
+  different throwaway key, so updating means uninstalling the old one first.
 
 The window lists paired devices, shows a pairing code and QR, and lets you
 enter another device's code. Closing the window keeps HENOS running in the
@@ -96,7 +102,7 @@ a 6-digit code, or by showing a code itself.
 - Android does not let apps read the clipboard in the background, so sending
   from the phone takes one tap: "Send my clipboard" on the HENOS notification,
   or Share then "Send to my devices" from any app.
-- After the phone restarts, open HENOS once to reconnect.
+- HENOS reconnects on its own after the phone restarts.
 
 To build it you need Android Studio (SDK, NDK and command-line tools), Rust
 with the Android targets, and `cargo-ndk`:

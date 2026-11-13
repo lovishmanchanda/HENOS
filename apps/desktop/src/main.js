@@ -1,9 +1,10 @@
 // The HENOS window. It shows one snapshot of state from the Rust side and
-// re-reads it whenever the "state-changed" event arrives.
+// re-reads it whenever the "state-changed" event arrives. It does nothing on
+// its own while idle: no timers run unless a pairing code is on screen.
 //
 // Device names come from other devices, so every piece of text is put on the
-// page with textContent, never as HTML. The one exception is the QR code,
-// which the Rust side draws itself.
+// page with textContent, never as HTML. The exceptions are the QR code, which
+// the Rust side draws itself, and the fixed icons below.
 
 "use strict";
 
@@ -15,7 +16,7 @@ let state = null;
 
 /** What only this window knows: which panel is open, what was typed. */
 const ui = {
-  panel: "none", // "none" | "join"
+  panel: "none", // "none" | "choose" | "join"
   selectedDevice: null,
   code: "",
   busy: false,
@@ -25,6 +26,15 @@ const ui = {
 
 let countdownTimer = null;
 
+const ICONS = {
+  computer:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="11" rx="2"/><path d="M2.5 19.5h19"/></svg>',
+  phone:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/></svg>',
+  plus:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>',
+};
+
 /** Builds an element. Children may be elements, strings or null. */
 function h(tag, props, ...children) {
   const el = document.createElement(tag);
@@ -32,13 +42,20 @@ function h(tag, props, ...children) {
     if (value === null || value === undefined || value === false) continue;
     if (key === "class") el.className = value;
     else if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
-    else if (key === "disabled" || key === "autofocus") el[key] = Boolean(value);
+    else if (key === "disabled") el.disabled = Boolean(value);
     else el.setAttribute(key, value);
   }
   for (const child of children.flat()) {
     if (child === null || child === undefined || child === false) continue;
     el.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
+  return el;
+}
+
+/** One of the fixed icons above. */
+function glyph(name) {
+  const el = h("span", { class: "glyph", "aria-hidden": "true" });
+  el.innerHTML = ICONS[name];
   return el;
 }
 
@@ -52,6 +69,10 @@ const PLATFORM_NAMES = {
 
 function platformName(platform) {
   return PLATFORM_NAMES[platform] || "Device";
+}
+
+function platformGlyph(platform) {
+  return glyph(platform === "android" || platform === "ios" ? "phone" : "computer");
 }
 
 function formatCode(code) {
@@ -83,105 +104,109 @@ async function run(command, args) {
   }
 }
 
+function closePanel() {
+  ui.panel = "none";
+  ui.error = "";
+  ui.code = "";
+  render();
+}
+
 // ---------- sections ----------
 
-function header() {
-  const paused = state.clipboardPaused;
+function summary() {
+  if (state.clipboardPaused) return "Sharing is paused";
+  const connected = state.paired.filter((device) => device.connected).length;
+  if (state.paired.length === 0) return "Add a device to start sharing";
+  if (connected === 0) return "None of your devices are nearby";
+  return connected === 1 ? "Sharing with 1 device" : `Sharing with ${connected} devices`;
+}
+
+function topBar() {
+  const sharing = !state.clipboardPaused;
   return h(
     "header",
-    { class: "header" },
+    { class: "top" },
     h(
       "div",
-      { class: "identity" },
+      { class: "who" },
+      h("div", { class: "eyebrow" }, "This " + platformName(state.device.platform)),
       h("h1", {}, state.device.name),
-      h("p", { class: "muted small" }, "This " + platformName(state.device.platform)),
+      h("p", { class: "summary" }, summary()),
     ),
     h(
       "button",
       {
-        class: "toggle",
-        "aria-pressed": String(!paused),
-        onclick: () => run("set_clipboard_paused", { paused: !paused }),
+        class: "switch",
+        role: "switch",
+        "aria-checked": String(sharing),
+        "aria-label": "Share the clipboard",
+        onclick: () => run("set_clipboard_paused", { paused: sharing }),
       },
-      h("span", { class: "dot " + (paused ? "warn" : "ok") }),
-      paused ? "Clipboard sharing paused" : "Clipboard sharing on",
+      h("span", { class: "track" }),
     ),
   );
 }
 
 function pairedStatus(device) {
   if (device.connected) return ["ok", "Connected"];
-  if (device.nearby) return ["warn", "Nearby, connecting"];
-  return ["", "Not on this network"];
+  if (device.nearby) return ["wait", "Connecting"];
+  return ["", "Not nearby"];
 }
 
-function pairedList() {
-  const rows = state.paired.map((device) => {
-    const [dot, label] = pairedStatus(device);
-    const confirming = ui.confirmUnpair === device.id;
-    return h(
+function deviceRow(device) {
+  const [dot, label] = pairedStatus(device);
+  const confirming = ui.confirmUnpair === device.id;
+  return h(
+    "div",
+    { class: "row" },
+    platformGlyph(device.platform),
+    h(
       "div",
-      { class: "row" },
-      h(
-        "div",
-        { class: "grow" },
-        h("div", { class: "name" }, device.name),
-        h(
-          "div",
-          { class: "status muted small" },
-          h("span", { class: "dot " + dot }),
-          platformName(device.platform) + " · " + label,
-        ),
-      ),
-      h(
-        "div",
-        { class: "actions" },
-        confirming
-          ? [
-              h(
-                "button",
-                {
-                  class: "danger",
-                  onclick: async () => {
-                    ui.confirmUnpair = null;
-                    await run("unpair", { deviceId: device.id });
-                  },
-                },
-                "Unpair",
-              ),
-              h(
-                "button",
-                {
-                  onclick: () => {
-                    ui.confirmUnpair = null;
-                    render();
-                  },
-                },
-                "Keep",
-              ),
-            ]
-          : h(
+      { class: "text" },
+      h("div", { class: "name" }, device.name),
+      h("div", { class: "sub" }, h("span", { class: "dot " + dot }), label),
+    ),
+    h(
+      "div",
+      { class: "side" },
+      confirming
+        ? [
+            h(
               "button",
               {
-                class: "quiet",
-                onclick: () => {
-                  ui.confirmUnpair = device.id;
-                  render();
+                class: "btn danger",
+                onclick: async () => {
+                  ui.confirmUnpair = null;
+                  await run("unpair", { deviceId: device.id });
                 },
               },
               "Unpair",
             ),
-      ),
-    );
-  });
-
-  return h(
-    "section",
-    { class: "card" },
-    h("h2", {}, "Your devices"),
-    rows.length
-      ? h("div", { class: "list" }, rows)
-      : h("p", { class: "empty" }, "No devices paired yet. Add one below."),
+            h(
+              "button",
+              {
+                class: "btn",
+                onclick: () => {
+                  ui.confirmUnpair = null;
+                  render();
+                },
+              },
+              "Keep",
+            ),
+          ]
+        : h(
+            "button",
+            {
+              class: "btn ghost",
+              "aria-label": "Unpair " + device.name,
+              onclick: () => {
+                ui.confirmUnpair = device.id;
+                render();
+              },
+            },
+            "Unpair",
+          ),
+    ),
   );
 }
 
@@ -194,19 +219,19 @@ function showCodePanel() {
   const seconds = String(pairing.secondsLeft % 60).padStart(2, "0");
   return h(
     "div",
-    { class: "pairing" },
-    qr,
+    { class: "panel" },
     h(
       "div",
-      { class: "details" },
-      h("div", { class: "code" }, formatCode(pairing.code)),
+      { class: "show" },
+      qr,
       h(
-        "p",
-        { class: "muted" },
-        "On the other device, choose Enter a code and type this, or scan the QR code with the phone app.",
+        "div",
+        { class: "details" },
+        h("div", { class: "code" }, formatCode(pairing.code)),
+        h("p", { class: "hint" }, "Scan with the phone app, or choose Enter a code on the other device."),
+        h("p", { class: "fine" }, `Works once · expires in ${minutes}:${seconds}`),
+        h("div", {}, h("button", { class: "btn", onclick: () => run("stop_pairing") }, "Cancel")),
       ),
-      h("p", { class: "muted small" }, `Works once. Expires in ${minutes}:${seconds}.`),
-      h("div", {}, h("button", { onclick: () => run("stop_pairing") }, "Cancel")),
     ),
   );
 }
@@ -226,11 +251,7 @@ function joinPanel() {
   const submit = async () => {
     if (!ready) return;
     const paired = await run("pair_with_code", { deviceId: ui.selectedDevice, code: digits });
-    if (paired) {
-      ui.panel = "none";
-      ui.code = "";
-      render();
-    }
+    if (paired) closePanel();
   };
 
   const input = h("input", {
@@ -255,119 +276,136 @@ function joinPanel() {
 
   return h(
     "div",
-    { class: "join" },
+    { class: "panel" },
     candidates.length
       ? h(
           "div",
-          { class: "choices" },
+          { class: "nested" },
           candidates.map((device) =>
             h(
               "button",
               {
-                class: "choice" + (device.id === ui.selectedDevice ? " selected" : ""),
+                class: "row choice",
                 "aria-pressed": String(device.id === ui.selectedDevice),
                 onclick: () => {
                   ui.selectedDevice = device.id;
                   render();
                 },
               },
-              h("span", { class: "dot " + (device.pairing ? "ok" : "") }),
-              h("span", {}, device.name),
+              platformGlyph(device.platform),
               h(
-                "span",
-                { class: "muted small" },
-                platformName(device.platform) + (device.pairing ? " · showing a code" : " · not showing a code yet"),
+                "div",
+                { class: "text" },
+                h("div", { class: "name" }, device.name),
+                h(
+                  "div",
+                  { class: "sub" },
+                  h("span", { class: "dot " + (device.pairing ? "ok" : "") }),
+                  device.pairing ? "Showing a code" : "Not showing a code yet",
+                ),
               ),
             ),
           ),
         )
       : h(
           "p",
-          { class: "empty" },
-          "No other HENOS device found on this network yet. Open HENOS on the other device, then choose Show a code there.",
+          { class: "hint" },
+          "No other HENOS device found on this network yet. Open HENOS on the other device and choose Show a code.",
         ),
     h(
       "div",
       { class: "entry" },
       input,
-      h("button", { class: "primary", disabled: !ready, onclick: submit }, ui.busy ? "Pairing…" : "Pair"),
-      h(
-        "button",
-        {
-          onclick: () => {
-            ui.panel = "none";
-            ui.error = "";
-            ui.code = "";
-            render();
-          },
-        },
-        "Cancel",
-      ),
+      h("button", { class: "btn primary", disabled: !ready, onclick: submit }, ui.busy ? "Pairing…" : "Pair"),
+      h("button", { class: "btn", onclick: closePanel }, "Cancel"),
     ),
     ui.error ? h("p", { class: "error", role: "alert" }, ui.error) : null,
   );
 }
 
-function addDevice() {
-  let body;
-  if (state.pairing) {
-    body = showCodePanel();
-  } else if (ui.panel === "join") {
-    body = joinPanel();
-  } else {
-    body = [
+function choosePanel() {
+  return h(
+    "div",
+    { class: "panel" },
+    h("p", { class: "hint" }, "One device shows a code, the other enters it."),
+    h(
+      "div",
+      { class: "choices" },
       h(
-        "div",
-        { class: "tabs" },
-        h(
-          "button",
-          {
-            class: "primary",
-            disabled: ui.busy,
-            onclick: () => run("start_pairing"),
-          },
-          "Show a code",
-        ),
-        h(
-          "button",
-          {
-            onclick: () => {
-              ui.panel = "join";
-              ui.error = "";
-              render();
-            },
-          },
-          "Enter a code",
-        ),
+        "button",
+        { class: "btn primary", disabled: ui.busy, onclick: () => run("start_pairing") },
+        "Show a code",
       ),
-      ui.error ? h("p", { class: "error", role: "alert" }, ui.error) : null,
-    ];
+      h(
+        "button",
+        {
+          class: "btn",
+          onclick: () => {
+            ui.panel = "join";
+            ui.error = "";
+            render();
+          },
+        },
+        "Enter a code",
+      ),
+      h("button", { class: "btn ghost", onclick: closePanel }, "Cancel"),
+    ),
+    ui.error ? h("p", { class: "error", role: "alert" }, ui.error) : null,
+  );
+}
+
+function devices() {
+  let adding;
+  if (state.pairing) adding = showCodePanel();
+  else if (ui.panel === "join") adding = joinPanel();
+  else if (ui.panel === "choose") adding = choosePanel();
+  else {
+    adding = h(
+      "button",
+      {
+        class: "row",
+        onclick: () => {
+          ui.panel = "choose";
+          ui.error = "";
+          render();
+        },
+      },
+      glyph("plus"),
+      h("span", { class: "text" }, "Add a device"),
+    );
   }
-  return h("section", { class: "card" }, h("h2", {}, "Add a device"), body);
+
+  return h(
+    "section",
+    { class: "group" },
+    h("h2", {}, "Devices"),
+    h("div", { class: "sheet" }, state.paired.map(deviceRow), adding),
+  );
 }
 
 function activity() {
   if (!state.activity.length) return null;
   return h(
     "section",
-    { class: "card activity" },
-    h("h2", {}, "Recent activity"),
+    { class: "group activity" },
+    h("h2", {}, "Recent"),
     h(
       "div",
-      { class: "list" },
-      state.activity.slice(0, 12).map((entry) =>
-        h("div", { class: "row" }, h("time", {}, formatTime(entry.atMs)), h("span", {}, entry.text)),
+      { class: "sheet" },
+      state.activity.slice(0, 8).map((entry) =>
+        h(
+          "div",
+          { class: "row" },
+          h("time", {}, formatTime(entry.atMs)),
+          h("span", { class: "what" }, entry.text),
+        ),
       ),
     ),
   );
 }
 
-function footer() {
-  return h(
-    "p",
-    { class: "footer muted small" },
-    `HENOS ${state.version} · One Digital World · devices connect directly on your network, end-to-end encrypted`,
-  );
+function foot() {
+  return h("p", { class: "foot" }, `HENOS ${state.version} · One Digital World · end-to-end encrypted`);
 }
 
 // ---------- rendering ----------
@@ -381,7 +419,7 @@ function render() {
   const typing = active && active.id === "code-input";
   const caret = typing ? active.selectionStart : null;
 
-  root.replaceChildren(header(), pairedList(), addDevice(), activity() || "", footer());
+  root.replaceChildren(topBar(), devices(), activity() || "", foot());
 
   if (typing) {
     const input = document.getElementById("code-input");
@@ -391,7 +429,7 @@ function render() {
     }
   }
 
-  // Tick the countdown while a code is on show.
+  // The only timer: ticking the countdown while a code is on show.
   if (state.pairing && !countdownTimer) {
     countdownTimer = setInterval(refresh, 1000);
   } else if (!state.pairing && countdownTimer) {

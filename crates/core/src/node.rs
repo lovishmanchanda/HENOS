@@ -43,6 +43,10 @@ use crate::{
     trust::{unix_now, PairedDevice, TrustStore},
 };
 
+/// How often we ask the network who is there. The library's default is
+/// several times a second, which keeps the processor waking up for nothing;
+/// a device appearing a couple of seconds later is not noticeable.
+const DISCOVERY_CADENCE: Duration = Duration::from_secs(3);
 /// mDNS service name. Only HENOS devices advertise and browse it.
 const MDNS_SERVICE: &str = "henos";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -51,7 +55,7 @@ const PING_TIMEOUT: Duration = Duration::from_secs(5);
 /// Upper bound for one pairing attempt, start to finish.
 const PAIR_TIMEOUT: Duration = Duration::from_secs(30);
 /// How often we retry paired nearby devices we are not connected to.
-const RECONNECT_INTERVAL: Duration = Duration::from_secs(5);
+const RECONNECT_INTERVAL: Duration = Duration::from_secs(10);
 /// Being refused by a device we paired with this recently does not count as
 /// being unpaired: the other side may simply not have saved us yet.
 const UNPAIR_GRACE_SECS: u64 = 30;
@@ -63,7 +67,7 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_HELLO_FRAME: usize = 1024;
 /// A device known only from its greetings is forgotten after this long
 /// without a new one.
-const GREETING_TTL: Duration = Duration::from_secs(20);
+const GREETING_TTL: Duration = Duration::from_secs(45);
 /// How often we re-check whether a device that said it sees us still does.
 const GREETING_RECHECK: Duration = Duration::from_secs(60);
 /// Most devices remembered from greetings alone.
@@ -1314,6 +1318,7 @@ async fn pair(shared: &Arc<Shared>, addr: EndpointAddr, code: String) -> Result<
 fn start_discovery(shared: Arc<Shared>) -> Result<JoinHandle<()>> {
     let mdns = MdnsAddressLookup::builder()
         .service_name(MDNS_SERVICE)
+        .discovery_cadence(DISCOVERY_CADENCE)
         .build(shared.id)
         .map_err(|e| Error::Bind(format!("local discovery unavailable: {e}")))?;
     shared

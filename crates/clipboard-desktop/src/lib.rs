@@ -119,6 +119,20 @@ impl<F: FnMut(ClipboardContent)> ClipboardHandler for Handler<F> {
     }
 }
 
+/// macOS has no clipboard-change event, so the watcher has to look at a
+/// counter now and then. Once a second is cheap and still feels immediate by
+/// the time someone has moved to their other device. Windows and Linux are
+/// told about changes by the system and do not poll at all.
+#[cfg(target_os = "macos")]
+fn new_watcher<T: ClipboardHandler>() -> clipboard_rs::Result<ClipboardWatcherContext<T>> {
+    ClipboardWatcherContext::new_with_interval(std::time::Duration::from_secs(1))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn new_watcher<T: ClipboardHandler>() -> clipboard_rs::Result<ClipboardWatcherContext<T>> {
+    ClipboardWatcherContext::new()
+}
+
 /// Calls `on_copy` with the new content each time the system clipboard
 /// changes, from a dedicated thread.
 ///
@@ -134,7 +148,7 @@ where
         .name("henos-clipboard-watch".into())
         .spawn(move || {
             let setup = ClipboardContext::new().and_then(|context| {
-                let watcher = ClipboardWatcherContext::new()?;
+                let watcher = new_watcher()?;
                 Ok((context, watcher))
             });
             let (context, mut watcher) = match setup {
