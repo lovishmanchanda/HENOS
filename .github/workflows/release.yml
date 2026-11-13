@@ -59,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
@@ -75,9 +75,16 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;36.0.0"
           cargo install cargo-ndk --locked
       - name: Build the Rust core for phones
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
-        run: apps/android/build-rust.sh
+        run: |
+          # Use the NDK that comes with the build machine, or fetch one.
+          ndk="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          if [ -z "$ndk" ] || [ ! -d "$ndk" ]; then
+            "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;30.0.16248370"
+            ndk="$ANDROID_HOME/ndk/30.0.16248370"
+          fi
+          export ANDROID_NDK_HOME="$ndk"
+          echo "Using NDK at $ANDROID_NDK_HOME"
+          apps/android/build-rust.sh
       # With the signing secrets set, the app is signed with the project's
       # own key and can update over earlier releases. Without them it is
       # signed with a throwaway key: it installs, but cannot update in place.
