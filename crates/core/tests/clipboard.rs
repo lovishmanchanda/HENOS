@@ -177,7 +177,8 @@ async fn copy_on_one_device_arrives_on_the_other() {
         event,
         ClipboardEvent::Received {
             from: a.node.id(),
-            bytes: "hello from A".len()
+            bytes: "hello from A".len(),
+            image: false
         }
     );
 

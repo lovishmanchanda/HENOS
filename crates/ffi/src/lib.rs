@@ -71,6 +71,7 @@ impl Henos {
     #[uniffi::constructor]
     pub fn start(
         data_dir: String,
+        downloads_dir: String,
         device_name: String,
         clipboard: Arc<dyn ClipboardSink>,
         listener: Arc<dyn ChangeListener>,
@@ -84,6 +85,7 @@ impl Henos {
 
         let mut config = AppConfig::new(data_dir);
         config.device_name = Some(device_name);
+        config.downloads_dir = Some(downloads_dir.into());
         let app = runtime.block_on(App::start(config, Arc::new(SinkBackend(clipboard))))?;
 
         let mut changes = app.subscribe_changes();
@@ -131,6 +133,33 @@ impl Henos {
         let _context = self.runtime.enter();
         self.app.unpair(&device_id)?;
         Ok(())
+    }
+
+    /// Offers the file at `path` to a connected paired device. Returns the
+    /// transfer's id. The other person is asked whether to accept.
+    pub fn send_file(&self, device_id: String, path: String) -> Result<u64, HenosError> {
+        Ok(self
+            .runtime
+            .block_on(self.app.send_file(&device_id, path))?)
+    }
+
+    /// Accepts an offered file; it is saved into the downloads folder given
+    /// at start.
+    pub fn accept_file(&self, transfer_id: u64) -> Result<(), HenosError> {
+        Ok(self.app.accept_file(transfer_id)?)
+    }
+
+    pub fn decline_file(&self, transfer_id: u64) {
+        self.app.decline_file(transfer_id);
+    }
+
+    pub fn cancel_transfer(&self, transfer_id: u64) {
+        self.app.cancel_transfer(transfer_id);
+    }
+
+    /// Removes a finished or failed transfer from the list.
+    pub fn dismiss_transfer(&self, transfer_id: u64) {
+        self.app.dismiss_transfer(transfer_id);
     }
 
     /// Looks for devices right away, for when the app comes on screen.

@@ -723,13 +723,23 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_henos_ffi_checksum_method_clipboardsink_write_text(
     ): Int
+    external fun uniffi_henos_ffi_checksum_method_henos_accept_file(
+    ): Int
+    external fun uniffi_henos_ffi_checksum_method_henos_cancel_transfer(
+    ): Int
     external fun uniffi_henos_ffi_checksum_method_henos_copy_text(
+    ): Int
+    external fun uniffi_henos_ffi_checksum_method_henos_decline_file(
+    ): Int
+    external fun uniffi_henos_ffi_checksum_method_henos_dismiss_transfer(
     ): Int
     external fun uniffi_henos_ffi_checksum_method_henos_look_now(
     ): Int
     external fun uniffi_henos_ffi_checksum_method_henos_pair_with_code(
     ): Int
     external fun uniffi_henos_ffi_checksum_method_henos_pair_with_ticket(
+    ): Int
+    external fun uniffi_henos_ffi_checksum_method_henos_send_file(
     ): Int
     external fun uniffi_henos_ffi_checksum_method_henos_set_clipboard_paused(
     ): Int
@@ -787,9 +797,17 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_henos_ffi_fn_free_henos(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    external fun uniffi_henos_ffi_fn_constructor_henos_start(`dataDir`: RustBuffer.ByValue,`deviceName`: RustBuffer.ByValue,`clipboard`: Long,`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_henos_ffi_fn_constructor_henos_start(`dataDir`: RustBuffer.ByValue,`downloadsDir`: RustBuffer.ByValue,`deviceName`: RustBuffer.ByValue,`clipboard`: Long,`listener`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
+    external fun uniffi_henos_ffi_fn_method_henos_accept_file(`ptr`: Long,`transferId`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_henos_ffi_fn_method_henos_cancel_transfer(`ptr`: Long,`transferId`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
     external fun uniffi_henos_ffi_fn_method_henos_copy_text(`ptr`: Long,`text`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_henos_ffi_fn_method_henos_decline_file(`ptr`: Long,`transferId`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Unit
+    external fun uniffi_henos_ffi_fn_method_henos_dismiss_transfer(`ptr`: Long,`transferId`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_henos_ffi_fn_method_henos_look_now(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
@@ -797,6 +815,8 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_henos_ffi_fn_method_henos_pair_with_ticket(`ptr`: Long,`ticket`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_henos_ffi_fn_method_henos_send_file(`ptr`: Long,`deviceId`: RustBuffer.ByValue,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
     external fun uniffi_henos_ffi_fn_method_henos_set_clipboard_paused(`ptr`: Long,`paused`: Byte,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     external fun uniffi_henos_ffi_fn_method_henos_shutdown(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -934,7 +954,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_henos_ffi_checksum_method_clipboardsink_write_text() and 0xFFFF) != 30820) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if ((lib.uniffi_henos_ffi_checksum_method_henos_accept_file() and 0xFFFF) != 9689) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_henos_ffi_checksum_method_henos_cancel_transfer() and 0xFFFF) != 594) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if ((lib.uniffi_henos_ffi_checksum_method_henos_copy_text() and 0xFFFF) != 36093) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_henos_ffi_checksum_method_henos_decline_file() and 0xFFFF) != 62877) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_henos_ffi_checksum_method_henos_dismiss_transfer() and 0xFFFF) != 39514) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_henos_ffi_checksum_method_henos_look_now() and 0xFFFF) != 46194) {
@@ -944,6 +976,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_henos_ffi_checksum_method_henos_pair_with_ticket() and 0xFFFF) != 54393) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if ((lib.uniffi_henos_ffi_checksum_method_henos_send_file() and 0xFFFF) != 57127) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if ((lib.uniffi_henos_ffi_checksum_method_henos_set_clipboard_paused() and 0xFFFF) != 4338) {
@@ -964,7 +999,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if ((lib.uniffi_henos_ffi_checksum_method_henos_unpair() and 0xFFFF) != 35147) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if ((lib.uniffi_henos_ffi_checksum_constructor_henos_start() and 0xFFFF) != 41326) {
+    if ((lib.uniffi_henos_ffi_checksum_constructor_henos_start() and 0xFFFF) != 33099) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
 }
@@ -1153,6 +1188,29 @@ private class JavaLangRefCleanable(
     val cleanable: java.lang.ref.Cleaner.Cleanable
 ) : UniffiCleaner.Cleanable {
     override fun clean() = cleanable.clean()
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterULong: FfiConverter<ULong, Long> {
+    override fun lift(value: Long): ULong {
+        return value.toULong()
+    }
+
+    override fun read(buf: ByteBuffer): ULong {
+        return lift(buf.getLong())
+    }
+
+    override fun lower(value: ULong): Long {
+        return value.toLong()
+    }
+
+    override fun allocationSize(value: ULong) = 8UL
+
+    override fun write(value: ULong, buf: ByteBuffer) {
+        buf.putLong(value.toLong())
+    }
 }
 
 /**
@@ -1971,10 +2029,25 @@ public object FfiConverterTypeClipboardSink: FfiConverter<ClipboardSink, Long> {
 public interface HenosInterface {
     
     /**
+     * Accepts an offered file; it is saved into the downloads folder given
+     * at start.
+     */
+    fun `acceptFile`(`transferId`: kotlin.ULong)
+    
+    fun `cancelTransfer`(`transferId`: kotlin.ULong)
+    
+    /**
      * Sends text the person copied on the phone to the paired devices.
      * Blocks until it has been handed over.
      */
     fun `copyText`(`text`: kotlin.String)
+    
+    fun `declineFile`(`transferId`: kotlin.ULong)
+    
+    /**
+     * Removes a finished or failed transfer from the list.
+     */
+    fun `dismissTransfer`(`transferId`: kotlin.ULong)
     
     /**
      * Looks for devices right away, for when the app comes on screen.
@@ -1990,6 +2063,12 @@ public interface HenosInterface {
      * Pairs using the text of a scanned QR code. Blocks until done.
      */
     fun `pairWithTicket`(`ticket`: kotlin.String)
+    
+    /**
+     * Offers the file at `path` to a connected paired device. Returns the
+     * transfer's id. The other person is asked whether to accept.
+     */
+    fun `sendFile`(`deviceId`: kotlin.String, `path`: kotlin.String): kotlin.ULong
     
     fun `setClipboardPaused`(`paused`: kotlin.Boolean)
     
@@ -2121,6 +2200,37 @@ open class Henos: Disposable, AutoCloseable, HenosInterface
 
     
     /**
+     * Accepts an offered file; it is saved into the downloads folder given
+     * at start.
+     */
+    @Throws(HenosException::class)override fun `acceptFile`(`transferId`: kotlin.ULong)
+        = 
+    callWithHandle {
+    uniffiRustCallWithError(HenosException) { _status ->
+    UniffiLib.uniffi_henos_ffi_fn_method_henos_accept_file(
+        it,
+        
+        FfiConverterULong.lower(`transferId`),_status)
+}
+    }
+    
+    
+
+    override fun `cancelTransfer`(`transferId`: kotlin.ULong)
+        = 
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_henos_ffi_fn_method_henos_cancel_transfer(
+        it,
+        
+        FfiConverterULong.lower(`transferId`),_status)
+}
+    }
+    
+    
+
+    
+    /**
      * Sends text the person copied on the phone to the paired devices.
      * Blocks until it has been handed over.
      */override fun `copyText`(`text`: kotlin.String)
@@ -2131,6 +2241,35 @@ open class Henos: Disposable, AutoCloseable, HenosInterface
         it,
         
         FfiConverterString.lower(`text`),_status)
+}
+    }
+    
+    
+
+    override fun `declineFile`(`transferId`: kotlin.ULong)
+        = 
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_henos_ffi_fn_method_henos_decline_file(
+        it,
+        
+        FfiConverterULong.lower(`transferId`),_status)
+}
+    }
+    
+    
+
+    
+    /**
+     * Removes a finished or failed transfer from the list.
+     */override fun `dismissTransfer`(`transferId`: kotlin.ULong)
+        = 
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_henos_ffi_fn_method_henos_dismiss_transfer(
+        it,
+        
+        FfiConverterULong.lower(`transferId`),_status)
 }
     }
     
@@ -2184,6 +2323,26 @@ open class Henos: Disposable, AutoCloseable, HenosInterface
 }
     }
     
+    
+
+    
+    /**
+     * Offers the file at `path` to a connected paired device. Returns the
+     * transfer's id. The other person is asked whether to accept.
+     */
+    @Throws(HenosException::class)override fun `sendFile`(`deviceId`: kotlin.String, `path`: kotlin.String): kotlin.ULong {
+            return FfiConverterULong.lift(
+    callWithHandle {
+    uniffiRustCallWithError(HenosException) { _status ->
+    UniffiLib.uniffi_henos_ffi_fn_method_henos_send_file(
+        it,
+        
+        FfiConverterString.lower(`deviceId`),
+        FfiConverterString.lower(`path`),_status)
+}
+    }
+    )
+    }
     
 
     override fun `setClipboardPaused`(`paused`: kotlin.Boolean)
@@ -2283,13 +2442,14 @@ open class Henos: Disposable, AutoCloseable, HenosInterface
     /**
      * Starts HENOS. `data_dir` is the app's private storage folder.
      */
-    @Throws(HenosException::class) fun `start`(`dataDir`: kotlin.String, `deviceName`: kotlin.String, `clipboard`: ClipboardSink, `listener`: ChangeListener): Henos {
+    @Throws(HenosException::class) fun `start`(`dataDir`: kotlin.String, `downloadsDir`: kotlin.String, `deviceName`: kotlin.String, `clipboard`: ClipboardSink, `listener`: ChangeListener): Henos {
             return FfiConverterTypeHenos.lift(
     uniffiRustCallWithError(HenosException) { _status ->
     UniffiLib.uniffi_henos_ffi_fn_constructor_henos_start(
     
         
         FfiConverterString.lower(`dataDir`),
+        FfiConverterString.lower(`downloadsDir`),
         FfiConverterString.lower(`deviceName`),
         FfiConverterTypeClipboardSink.lower(`clipboard`),
         FfiConverterTypeChangeListener.lower(`listener`),_status)

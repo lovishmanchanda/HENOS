@@ -29,6 +29,7 @@ pub mod trust;
 
 pub use clipboard::{
     ClipboardBackend, ClipboardContent, ClipboardEvent, ClipboardItem, ClipboardSync, LocalCopy,
+    PngImage,
 };
 pub use device::{DeviceInfo, Platform};
 pub use error::{Error, Result};

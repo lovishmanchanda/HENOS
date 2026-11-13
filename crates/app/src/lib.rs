@@ -700,7 +700,11 @@ async fn watch_clipboard(app: Weak<App>, mut events: broadcast::Receiver<Clipboa
         let Some(app) = app.upgrade() else { break };
         match event {
             ClipboardEvent::Sent { devices: 0, .. } => continue,
-            ClipboardEvent::Sent { bytes, devices } => {
+            ClipboardEvent::Sent {
+                bytes,
+                devices,
+                image,
+            } => {
                 let to = if devices == 1 {
                     "1 device".to_owned()
                 } else {
@@ -708,14 +712,18 @@ async fn watch_clipboard(app: Weak<App>, mut events: broadcast::Receiver<Clipboa
                 };
                 app.log(
                     ActivityKind::ClipboardSent,
-                    format!("Sent copied text ({}) to {to}", human_size(bytes)),
+                    format!("Sent {} ({}) to {to}", copied(image), human_size(bytes)),
                 );
             }
-            ClipboardEvent::Received { from, bytes } => {
+            ClipboardEvent::Received { from, bytes, image } => {
                 let name = app.name_of(from);
                 app.log(
                     ActivityKind::ClipboardReceived,
-                    format!("Received copied text ({}) from {name}", human_size(bytes)),
+                    format!(
+                        "Received {} ({}) from {name}",
+                        copied(image),
+                        human_size(bytes)
+                    ),
                 );
             }
         }
@@ -767,11 +775,21 @@ fn qr_svg(text: &str) -> Result<String> {
         .build())
 }
 
+fn copied(image: bool) -> &'static str {
+    if image {
+        "a copied image"
+    } else {
+        "copied text"
+    }
+}
+
 fn human_size(bytes: usize) -> String {
     if bytes < 1024 {
         format!("{bytes} bytes")
-    } else {
+    } else if bytes < 1024 * 1024 {
         format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
 

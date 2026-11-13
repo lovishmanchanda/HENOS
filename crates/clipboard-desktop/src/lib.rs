@@ -14,10 +14,10 @@ use std::{
 };
 
 use clipboard_rs::{
-    Clipboard, ClipboardContext, ClipboardHandler, ClipboardWatcher, ClipboardWatcherContext,
-    WatcherShutdown,
+    common::RustImage, Clipboard, ClipboardContext, ClipboardHandler, ClipboardWatcher,
+    ClipboardWatcherContext, ContentFormat, RustImageData, WatcherShutdown,
 };
-use henos_core::{ClipboardBackend, ClipboardContent};
+use henos_core::{ClipboardBackend, ClipboardContent, PngImage};
 use tracing::debug;
 
 /// Clipboard format names that apps use to say "do not record or share this".
@@ -70,6 +70,10 @@ impl ClipboardBackend for SystemClipboard {
             ClipboardContent::Text(text) => {
                 context.set_text(text.clone()).map_err(|e| e.to_string())
             }
+            ClipboardContent::Image(image) => {
+                let picture = RustImageData::from_bytes(image.png()).map_err(|e| e.to_string())?;
+                context.set_image(picture).map_err(|e| e.to_string())
+            }
             _ => Err("this kind of clipboard content is not supported yet".into()),
         }
     }
@@ -111,10 +115,30 @@ impl<F: FnMut(ClipboardContent)> ClipboardHandler for Handler<F> {
                 return;
             }
         }
-        match self.context.get_text() {
-            Ok(text) if !text.is_empty() => (self.on_copy)(ClipboardContent::Text(text)),
-            // No text on the clipboard: an image, files, or nothing.
-            _ => {}
+        // Text wins when both are present: apps such as spreadsheets put a
+        // picture of the cells next to the text, and the text is what is
+        // meant.
+        if let Ok(text) = self.context.get_text() {
+            if !text.is_empty() {
+                (self.on_copy)(ClipboardContent::Text(text));
+                return;
+            }
+        }
+        if !self.context.has(ContentFormat::Image) {
+            // Files, or nothing we share.
+            return;
+        }
+        let png = self
+            .context
+            .get_image()
+            .and_then(|picture| picture.to_png())
+            .map(|encoded| encoded.get_bytes().to_vec());
+        match png
+            .map_err(|e| e.to_string())
+            .and_then(|bytes| PngImage::new(bytes).map_err(|e| e.to_string()))
+        {
+            Ok(image) => (self.on_copy)(ClipboardContent::Image(image)),
+            Err(e) => debug!("copied image not shared: {e}"),
         }
     }
 }

@@ -53,13 +53,93 @@ pub const MAX_TEXT_BYTES: usize = 1024 * 1024;
 /// freeze sync for everyone else.
 const MAX_STAMP_LEAD_MS: u64 = 5 * 60 * 1000;
 
+/// Largest image that is sent or accepted, as a PNG file.
+pub const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+
+/// Largest image side accepted, in pixels. A small file can claim an
+/// enormous picture; this keeps decoding it from eating the memory.
+const MAX_IMAGE_SIDE: u32 = 12_000;
+const MAX_IMAGE_DECODE_BYTES: u64 = 400 * 1024 * 1024;
+
 const KIND_TEXT: &str = "text";
+const KIND_PNG: &str = "png";
 
 /// Something that can be on the clipboard.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ClipboardContent {
     Text(String),
+    Image(PngImage),
+}
+
+/// A picture, held as a PNG file that has been checked to decode.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PngImage {
+    png: Vec<u8>,
+    width: u32,
+    height: u32,
+    /// Identifies the picture by its pixels, not by its file bytes: systems
+    /// re-encode an image when it passes through the clipboard, and the
+    /// same picture must still be recognised as the same.
+    pixels: [u8; 32],
+}
+
+impl std::fmt::Debug for PngImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "PngImage({}x{}, {} bytes)",
+            self.width,
+            self.height,
+            self.png.len()
+        )
+    }
+}
+
+impl PngImage {
+    /// Checks that `png` is a PNG of acceptable size and takes it.
+    pub fn new(png: Vec<u8>) -> Result<Self> {
+        if png.len() > MAX_IMAGE_BYTES {
+            return Err(Error::FrameTooLarge {
+                size: png.len(),
+                limit: MAX_IMAGE_BYTES,
+            });
+        }
+        let invalid = |why: String| Error::Protocol(format!("not a usable image: {why}"));
+        let mut reader =
+            image::ImageReader::with_format(std::io::Cursor::new(&png), image::ImageFormat::Png);
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MAX_IMAGE_SIDE);
+        limits.max_image_height = Some(MAX_IMAGE_SIDE);
+        limits.max_alloc = Some(MAX_IMAGE_DECODE_BYTES);
+        reader.limits(limits);
+        let decoded = reader.decode().map_err(|e| invalid(e.to_string()))?;
+        let rgba = decoded.to_rgba8();
+        let (width, height) = rgba.dimensions();
+        if width == 0 || height == 0 {
+            return Err(invalid("it has no pixels".into()));
+        }
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&width.to_be_bytes());
+        hasher.update(&height.to_be_bytes());
+        hasher.update(rgba.as_raw());
+        Ok(Self {
+            png,
+            width,
+            height,
+            pixels: *hasher.finalize().as_bytes(),
+        })
+    }
+
+    /// The image as a PNG file.
+    pub fn png(&self) -> &[u8] {
+        &self.png
+    }
+
+    /// Width and height in pixels.
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
 }
 
 impl ClipboardContent {
@@ -67,6 +147,7 @@ impl ClipboardContent {
     pub fn len(&self) -> usize {
         match self {
             Self::Text(text) => text.len(),
+            Self::Image(image) => image.png.len(),
         }
     }
 
@@ -77,18 +158,21 @@ impl ClipboardContent {
     fn kind(&self) -> &'static str {
         match self {
             Self::Text(_) => KIND_TEXT,
+            Self::Image(_) => KIND_PNG,
         }
     }
 
     fn payload(&self) -> &[u8] {
         match self {
             Self::Text(text) => text.as_bytes(),
+            Self::Image(image) => &image.png,
         }
     }
 
     fn limit(&self) -> usize {
         match self {
             Self::Text(_) => MAX_TEXT_BYTES,
+            Self::Image(_) => MAX_IMAGE_BYTES,
         }
     }
 
@@ -104,6 +188,9 @@ impl ClipboardContent {
                 for chunk in text.split('\r') {
                     hasher.update(chunk.as_bytes());
                 }
+            }
+            Self::Image(image) => {
+                hasher.update(&image.pixels);
             }
         }
         *hasher.finalize().as_bytes()
@@ -162,6 +249,7 @@ where
 {
     let limit = match header.kind.as_str() {
         KIND_TEXT => MAX_TEXT_BYTES,
+        KIND_PNG => MAX_IMAGE_BYTES,
         other => {
             return Err(Error::Protocol(format!(
                 "unknown clipboard content kind {other:?}"
@@ -199,6 +287,9 @@ where
             String::from_utf8(payload)
                 .map_err(|_| Error::Protocol("clipboard text is not valid UTF-8".into()))?,
         ),
+        // Decoded here, so a damaged or oversized picture never reaches the
+        // system clipboard.
+        KIND_PNG => ClipboardContent::Image(PngImage::new(payload)?),
         _ => unreachable!("kind was checked above"),
     };
     Ok(ClipboardItem {
@@ -229,8 +320,17 @@ pub enum LocalCopy {
 /// Progress reports for UIs. They never contain the clipboard content.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClipboardEvent {
-    Sent { bytes: usize, devices: usize },
-    Received { from: DeviceId, bytes: usize },
+    Sent {
+        bytes: usize,
+        devices: usize,
+        /// The item was a picture rather than text.
+        image: bool,
+    },
+    Received {
+        from: DeviceId,
+        bytes: usize,
+        image: bool,
+    },
 }
 
 #[derive(Default)]
@@ -332,6 +432,7 @@ impl ClipboardSync {
         drop(ordered);
 
         let bytes = content.len();
+        let image = matches!(content, ClipboardContent::Image(_));
         let item = Arc::new(ClipboardItem {
             content,
             stamp,
@@ -339,7 +440,11 @@ impl ClipboardSync {
         });
         let devices = self.node.send_clipboard(item).await;
         debug!(bytes, devices, "clipboard sent");
-        let _ = self.events.send(ClipboardEvent::Sent { bytes, devices });
+        let _ = self.events.send(ClipboardEvent::Sent {
+            bytes,
+            devices,
+            image,
+        });
         Ok(LocalCopy::Sent { devices })
     }
 
@@ -371,6 +476,7 @@ impl ClipboardSync {
                 let _ = self.events.send(ClipboardEvent::Received {
                     from: item.origin,
                     bytes: item.content.len(),
+                    image: matches!(item.content, ClipboardContent::Image(_)),
                 });
             }
             Ok(Err(e)) => warn!("could not write to the clipboard: {e}"),
@@ -476,6 +582,85 @@ mod tests {
         assert!(matches!(err, Error::Protocol(_)));
         // A kind from a newer version.
         let err = read_payload(&mut b"abc".as_slice(), &header("hologram", 3), from)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Protocol(_)));
+    }
+
+    /// A small PNG with the given pixel colour and compression setting.
+    fn png(colour: [u8; 4], fast: bool) -> Vec<u8> {
+        use image::{codecs::png, ImageEncoder};
+        let pixels: Vec<u8> = colour.iter().copied().cycle().take(4 * 8 * 8).collect();
+        let mut file = Vec::new();
+        let level = if fast {
+            png::CompressionType::Fast
+        } else {
+            png::CompressionType::Best
+        };
+        png::PngEncoder::new_with_quality(&mut file, level, png::FilterType::Adaptive)
+            .write_image(&pixels, 8, 8, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        file
+    }
+
+    #[tokio::test]
+    async fn image_round_trips() {
+        let from = Identity::generate().id();
+        let picture = PngImage::new(png([200, 30, 30, 255], true)).unwrap();
+        assert_eq!(picture.dimensions(), (8, 8));
+        let item = ClipboardItem {
+            content: ClipboardContent::Image(picture),
+            stamp: 1,
+            origin: from,
+        };
+        let mut wire = Vec::new();
+        write_payload(&mut wire, &item).await.unwrap();
+        let head = ClipboardHeader::for_item(&item);
+        let read = read_payload(&mut wire.as_slice(), &head, from)
+            .await
+            .unwrap();
+        assert_eq!(read, item);
+    }
+
+    #[test]
+    fn same_picture_is_recognised_however_it_is_encoded() {
+        let red_fast = PngImage::new(png([200, 30, 30, 255], true)).unwrap();
+        let red_best = PngImage::new(png([200, 30, 30, 255], false)).unwrap();
+        let blue = PngImage::new(png([30, 30, 200, 255], true)).unwrap();
+        assert_ne!(red_fast.png(), red_best.png(), "the two files differ");
+        assert_eq!(
+            ClipboardContent::Image(red_fast.clone()).fingerprint(),
+            ClipboardContent::Image(red_best).fingerprint()
+        );
+        assert_ne!(
+            ClipboardContent::Image(red_fast).fingerprint(),
+            ClipboardContent::Image(blue).fingerprint()
+        );
+    }
+
+    #[tokio::test]
+    async fn broken_or_oversized_images_are_refused() {
+        let from = Identity::generate().id();
+        assert!(PngImage::new(b"definitely not a png".to_vec()).is_err());
+        assert!(PngImage::new(Vec::new()).is_err());
+        let mut cut = png([1, 2, 3, 255], true);
+        cut.truncate(cut.len() / 2);
+        assert!(PngImage::new(cut).is_err());
+        assert!(matches!(
+            PngImage::new(vec![0; MAX_IMAGE_BYTES + 1]),
+            Err(Error::FrameTooLarge { .. })
+        ));
+        // Announced as an image but too big: refused on the size alone.
+        let err = read_payload(
+            &mut [].as_slice(),
+            &header("png", MAX_IMAGE_BYTES as u64 + 1),
+            from,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, Error::FrameTooLarge { .. }));
+        // Announced as an image but not one.
+        let err = read_payload(&mut b"junk".as_slice(), &header("png", 4), from)
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Protocol(_)));

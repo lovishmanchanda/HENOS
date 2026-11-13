@@ -50,13 +50,39 @@ class SendClipboardActivity : Activity() {
     }
 }
 
-/** Receives text shared from another app ("Share" then "Send to my devices"). */
+/**
+ * Receives what another app shares ("Share" then "Send to my devices"):
+ * files go to every connected device, plain text goes to their clipboards.
+ */
 class ShareActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val text = intent
-            ?.takeIf { it.action == Intent.ACTION_SEND }
-            ?.getStringExtra(Intent.EXTRA_TEXT)
-        sendAndFinish(text)
+        val shared = intent
+        val files: List<android.net.Uri> = when (shared?.action) {
+            Intent.ACTION_SEND -> listOfNotNull(streamOf(shared))
+            Intent.ACTION_SEND_MULTIPLE -> streamsOf(shared)
+            else -> emptyList()
+        }
+        if (files.isEmpty()) {
+            sendAndFinish(shared?.takeIf { it.action == Intent.ACTION_SEND }?.getStringExtra(Intent.EXTRA_TEXT))
+            return
+        }
+        HenosService.start(this)
+        thread(name = "henos-share") {
+            HenosCore.start(applicationContext)
+            val error = HenosCore.sendFiles(applicationContext, files, deviceId = null)
+            runOnUiThread {
+                val message = error ?: "Offered to your devices. They will ask to accept."
+                Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
+                finish()
+            }
+        }
     }
+
+    @Suppress("DEPRECATION")
+    private fun streamOf(intent: Intent): android.net.Uri? = intent.getParcelableExtra(Intent.EXTRA_STREAM)
+
+    @Suppress("DEPRECATION")
+    private fun streamsOf(intent: Intent): List<android.net.Uri> =
+        intent.getParcelableArrayListExtra<android.net.Uri>(Intent.EXTRA_STREAM).orEmpty()
 }

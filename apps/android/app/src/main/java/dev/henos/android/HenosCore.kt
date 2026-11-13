@@ -37,6 +37,19 @@ data class PairingOffer(val code: String, val secondsLeft: Long)
 
 data class ActivityEntry(val atMs: Long, val text: String)
 
+/** A file being offered, sent or received. */
+data class Transfer(
+    val id: Long,
+    val deviceName: String,
+    val name: String,
+    val size: Long,
+    val bytes: Long,
+    val incoming: Boolean,
+    /** offered, waiting, active, done or failed. */
+    val status: String,
+    val detail: String?,
+)
+
 /** Everything the screen shows. Parsed from the same JSON the desktop app reads. */
 data class UiState(
     val version: String,
@@ -45,6 +58,7 @@ data class UiState(
     val nearby: List<NearbyDevice>,
     val pairing: PairingOffer?,
     val clipboardPaused: Boolean,
+    val transfers: List<Transfer>,
     val activity: List<ActivityEntry>,
 ) {
     companion object {
@@ -75,6 +89,18 @@ data class UiState(
                     PairingOffer(it.getString("code"), it.getLong("secondsLeft"))
                 },
                 clipboardPaused = root.getBoolean("clipboardPaused"),
+                transfers = root.getJSONArray("transfers").map {
+                    Transfer(
+                        id = it.getLong("id"),
+                        deviceName = it.getString("deviceName"),
+                        name = it.getString("name"),
+                        size = it.getLong("size"),
+                        bytes = it.getLong("bytes"),
+                        incoming = it.getBoolean("incoming"),
+                        status = it.getString("status"),
+                        detail = if (it.isNull("detail")) null else it.getString("detail"),
+                    )
+                },
                 activity = root.getJSONArray("activity").map {
                     ActivityEntry(it.getLong("atMs"), it.getString("text"))
                 },
@@ -100,6 +126,9 @@ object HenosCore {
     @Volatile
     private var henos: Henos? = null
 
+    @Volatile
+    private var files: FileBridge? = null
+
     /** The latest snapshot, or null until HENOS has started. */
     val state: StateFlow<UiState?> = mutableState
 
@@ -112,8 +141,11 @@ object HenosCore {
         if (henos != null) return
         val app = context.applicationContext
         try {
+            val bridge = FileBridge(app)
+            files = bridge
             henos = Henos.start(
                 dataDir = app.filesDir.resolve("henos").absolutePath,
+                downloadsDir = bridge.incomingDir.absolutePath,
                 deviceName = deviceName(app),
                 clipboard = object : ClipboardSink {
                     override fun writeText(text: String) = putOnClipboard(app, text)
@@ -132,7 +164,32 @@ object HenosCore {
     /** Re-reads the state from the core. */
     fun refresh() {
         val running = henos ?: return
-        mutableState.value = UiState.parse(running.stateJson())
+        val parsed = UiState.parse(running.stateJson())
+        mutableState.value = parsed
+        files?.onTransfers(parsed.transfers)
+    }
+
+    /**
+     * Offers the picked or shared files to a device, or to every connected
+     * device when [deviceId] is null. Returns an error sentence or null.
+     */
+    fun sendFiles(context: Context, uris: List<android.net.Uri>, deviceId: String?): String? {
+        val bridge = files ?: return "HENOS is not running."
+        val targets = deviceId?.let { listOf(it) }
+            ?: state.value?.paired?.filter { it.connected }?.map { it.id }.orEmpty()
+        if (targets.isEmpty()) return "None of your devices are connected right now."
+        var problem: String? = null
+        for (uri in uris) {
+            val copy = bridge.copyForSending(context, uri)
+            if (copy == null) {
+                problem = "One of the files could not be read."
+                continue
+            }
+            for (target in targets) {
+                problem = run { bridge.sent(it.sendFile(target, copy.absolutePath).toLong(), copy) } ?: problem
+            }
+        }
+        return problem
     }
 
     /** Runs [action] against the core; returns an error sentence or null. */

@@ -373,10 +373,10 @@ fn start_clipboard(node: &Arc<Node>, mode: ClipboardMode) -> Result<Option<Clipb
     tasks.push(tokio::spawn(async move {
         loop {
             match events.recv().await {
-                Ok(ClipboardEvent::Sent { bytes, devices }) => {
+                Ok(ClipboardEvent::Sent { bytes, devices, .. }) => {
                     println!("clipboard    sent {bytes} bytes to {devices} device(s)")
                 }
-                Ok(ClipboardEvent::Received { from, bytes }) => {
+                Ok(ClipboardEvent::Received { from, bytes, .. }) => {
                     let name = reporter
                         .peer(&from)
                         .map(|p| p.device.name)

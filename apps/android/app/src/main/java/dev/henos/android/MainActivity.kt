@@ -185,6 +185,7 @@ private fun Content(state: UiState) {
     }
 
     Top(state) { paused -> act { it.setClipboardPaused(paused) } }
+    Files(state.transfers, act = ::act)
     Devices(state, message, onMessage = { message = it }, act = ::act)
     Recent(state.activity)
     Text(
@@ -325,9 +326,27 @@ private fun Devices(
     act: ((uniffi.henos_ffi.Henos) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var panel by remember { mutableStateOf(Panel.Closed) }
     var confirming by remember { mutableStateOf<String?>(null) }
     val faint = MaterialTheme.colorScheme.outline
+
+    // Picking files to send to one device.
+    var sendTo by remember { mutableStateOf<String?>(null) }
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments(),
+    ) { picked ->
+        val target = sendTo
+        sendTo = null
+        if (picked.isNotEmpty() && target != null) {
+            scope.launch {
+                val error = withContext(Dispatchers.IO) {
+                    HenosCore.sendFiles(context.applicationContext, picked, target)
+                }
+                onMessage(error)
+            }
+        }
+    }
 
     Group("Devices") {
         state.paired.forEach { device ->
@@ -343,6 +362,11 @@ private fun Devices(
                     }
                     TextButton(onClick = { confirming = null }) { Text("Keep") }
                 } else {
+                    if (device.connected) {
+                        TextButton(onClick = { sendTo = device.id; picker.launch(arrayOf("*/*")) }) {
+                            Text("Send file")
+                        }
+                    }
                     TextButton(onClick = { confirming = device.id }) { Text("Unpair", color = faint) }
                 }
             }
@@ -418,6 +442,75 @@ private fun Devices(
         while (state.pairing != null) {
             delay(1000)
             HenosCore.refresh()
+        }
+    }
+}
+
+private fun formatSize(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes bytes"
+    bytes < 1024 * 1024 -> "%.1f KB".format(bytes / 1024.0)
+    bytes < 1024L * 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024))
+    else -> "%.1f GB".format(bytes / (1024.0 * 1024 * 1024))
+}
+
+/** Files being offered, sent or received. Shown only when there are any. */
+@Composable
+private fun Files(transfers: List<Transfer>, act: ((uniffi.henos_ffi.Henos) -> Unit) -> Unit) {
+    if (transfers.isEmpty()) return
+    val faint = MaterialTheme.colorScheme.outline
+    Group("Files") {
+        transfers.forEachIndexed { index, transfer ->
+            if (index > 0) Hairline(inset = 14.dp)
+            val id = transfer.id.toULong()
+            Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Text(transfer.name, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val percent = if (transfer.size > 0) (transfer.bytes * 100 / transfer.size).toInt() else 100
+                val line = when (transfer.status) {
+                    "offered" -> "${transfer.deviceName} wants to send this · ${formatSize(transfer.size)}"
+                    "waiting" -> "Waiting for ${transfer.deviceName} to accept · ${formatSize(transfer.size)}"
+                    "active" -> (if (transfer.incoming) "Receiving from " else "Sending to ") +
+                        "${transfer.deviceName} · $percent%"
+                    "done" -> if (transfer.incoming) {
+                        "From ${transfer.deviceName} · saved in Downloads, in the HENOS folder"
+                    } else {
+                        "Sent to ${transfer.deviceName} · ${formatSize(transfer.size)}"
+                    }
+                    else -> transfer.detail ?: "Did not complete."
+                }
+                Text(
+                    line,
+                    color = if (transfer.status == "failed") MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                )
+                if (transfer.status == "active") {
+                    Spacer(Modifier.height(6.dp))
+                    Box(
+                        Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp))
+                            .background(MaterialTheme.colorScheme.outlineVariant),
+                    ) {
+                        Box(
+                            Modifier.fillMaxWidth(percent / 100f).height(4.dp)
+                                .background(MaterialTheme.colorScheme.primary),
+                        )
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    when (transfer.status) {
+                        "offered" -> {
+                            Button(
+                                onClick = { act { it.acceptFile(id) } },
+                                shape = RoundedCornerShape(10.dp),
+                            ) { Text("Accept") }
+                            QuietButton("Decline") { act { it.declineFile(id) } }
+                        }
+                        "waiting", "active" -> QuietButton("Cancel") { act { it.cancelTransfer(id) } }
+                        else -> TextButton(onClick = { act { it.dismissTransfer(id) } }) {
+                            Text("Clear", color = faint)
+                        }
+                    }
+                }
+            }
         }
     }
 }
