@@ -21,6 +21,13 @@
     ],
     pairing: null,
     clipboardPaused: false,
+    transfers: [
+      { id: 1, deviceId: id("b2"), deviceName: "Pixel 9", name: "IMG_2041.jpg", size: 3482910, bytes: 0, incoming: true, status: "offered", detail: null },
+      { id: 2, deviceId: id("b2"), deviceName: "Pixel 9", name: "Quarterly report final v3 (really final).pdf", size: 18400220, bytes: 7800000, incoming: false, status: "active", detail: null },
+      { id: 3, deviceId: id("c3"), deviceName: "DESKTOP-GAMING", name: "notes.txt", size: 812, bytes: 0, incoming: false, status: "waiting", detail: null },
+      { id: 4, deviceId: id("b2"), deviceName: "Pixel 9", name: "ticket.pdf", size: 90211, bytes: 90211, incoming: true, status: "done", detail: "/Users/me/Downloads/HENOS/ticket.pdf" },
+      { id: 5, deviceId: id("c3"), deviceName: "DESKTOP-GAMING", name: "setup.exe", size: 52000000, bytes: 0, incoming: false, status: "failed", detail: "The other device declined the file." },
+    ],
     activity: [
       { atMs: Date.now() - 60_000, kind: "clipboardReceived", text: "Received copied text (42 bytes) from Pixel 9" },
       { atMs: Date.now() - 300_000, kind: "clipboardSent", text: "Sent copied text (1.2 KB) to 1 device" },
@@ -75,6 +82,28 @@
       notify();
     },
     look_now() {},
+    pick_and_send() {},
+    send_file() {},
+    accept_file({ transferId }) {
+      const t = fake.transfers.find((x) => x.id === transferId);
+      t.status = "active";
+      t.bytes = t.size / 3;
+      notify();
+    },
+    decline_file({ transferId }) {
+      fake.transfers = fake.transfers.filter((x) => x.id !== transferId);
+      notify();
+    },
+    cancel_transfer({ transferId }) {
+      const t = fake.transfers.find((x) => x.id === transferId);
+      t.status = "failed";
+      t.detail = "Cancelled.";
+      notify();
+    },
+    dismiss_transfer({ transferId }) {
+      fake.transfers = fake.transfers.filter((x) => x.id !== transferId);
+      notify();
+    },
     set_clipboard_paused({ paused }) {
       fake.clipboardPaused = paused;
       notify();
@@ -89,5 +118,6 @@
     fake.paired = [];
     fake.nearby = [];
     fake.activity = [];
+    fake.transfers = [];
   }
 })();

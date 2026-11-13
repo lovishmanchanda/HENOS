@@ -22,6 +22,7 @@ const ui = {
   busy: false,
   error: "",
   confirmUnpair: null,
+  dropTarget: null,
 };
 
 let countdownTimer = null;
@@ -31,6 +32,8 @@ const ICONS = {
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="11" rx="2"/><path d="M2.5 19.5h19"/></svg>',
   phone:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 18h2"/></svg>',
+  file:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 3H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8z"/><path d="M13 3v5h5"/></svg>',
   plus:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>',
 };
@@ -77,6 +80,18 @@ function platformGlyph(platform) {
 
 function formatCode(code) {
   return code.slice(0, 3) + " " + code.slice(3);
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + " bytes";
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return (value >= 100 ? value.toFixed(0) : value.toFixed(1)) + " " + units[unit];
 }
 
 function formatTime(ms) {
@@ -158,17 +173,37 @@ function deviceRow(device) {
   const confirming = ui.confirmUnpair === device.id;
   return h(
     "div",
-    { class: "row" },
+    {
+      class: "row" + (ui.dropTarget === device.id ? " dropping" : ""),
+      // Lets a dragged file find the device it is dropped on.
+      "data-device": device.connected ? device.id : null,
+    },
     platformGlyph(device.platform),
     h(
       "div",
       { class: "text" },
       h("div", { class: "name" }, device.name),
-      h("div", { class: "sub" }, h("span", { class: "dot " + dot }), label),
+      h(
+        "div",
+        { class: "sub" },
+        h("span", { class: "dot " + dot }),
+        ui.dropTarget === device.id ? "Drop to send" : label,
+      ),
     ),
     h(
       "div",
       { class: "side" },
+      device.connected && !confirming
+        ? h(
+            "button",
+            {
+              class: "btn",
+              "aria-label": "Send a file to " + device.name,
+              onclick: () => run("pick_and_send", { deviceId: device.id }),
+            },
+            "Send file",
+          )
+        : null,
       confirming
         ? [
             h(
@@ -385,6 +420,86 @@ function devices() {
   );
 }
 
+function transferRow(transfer) {
+  const who = transfer.deviceName;
+  let sub;
+  let side;
+  const dismiss = h(
+    "button",
+    {
+      class: "btn ghost",
+      "aria-label": "Remove from list",
+      onclick: () => run("dismiss_transfer", { transferId: transfer.id }),
+    },
+    "Clear",
+  );
+  const cancel = h(
+    "button",
+    { class: "btn", onclick: () => run("cancel_transfer", { transferId: transfer.id }) },
+    "Cancel",
+  );
+
+  switch (transfer.status) {
+    case "offered":
+      sub = `${who} wants to send this · ${formatSize(transfer.size)}`;
+      side = [
+        h(
+          "button",
+          { class: "btn primary", onclick: () => run("accept_file", { transferId: transfer.id }) },
+          "Accept",
+        ),
+        h(
+          "button",
+          { class: "btn", onclick: () => run("decline_file", { transferId: transfer.id }) },
+          "Decline",
+        ),
+      ];
+      break;
+    case "waiting":
+      sub = `Waiting for ${who} to accept · ${formatSize(transfer.size)}`;
+      side = cancel;
+      break;
+    case "active": {
+      const percent = transfer.size ? Math.floor((transfer.bytes / transfer.size) * 100) : 100;
+      const bar = h("span", { class: "bar", role: "progressbar", "aria-valuenow": String(percent) }, h("span", {}));
+      bar.firstChild.style.width = percent + "%";
+      sub = [
+        `${transfer.incoming ? "Receiving from" : "Sending to"} ${who} · ${percent}%`,
+        bar,
+      ];
+      side = cancel;
+      break;
+    }
+    case "done":
+      sub = transfer.incoming
+        ? `From ${who} · saved in Downloads, in the HENOS folder`
+        : `Sent to ${who} · ${formatSize(transfer.size)}`;
+      side = dismiss;
+      break;
+    default:
+      sub = transfer.detail || "Did not complete.";
+      side = dismiss;
+  }
+
+  return h(
+    "div",
+    { class: "row" + (transfer.status === "failed" ? " failed" : "") },
+    glyph("file"),
+    h("div", { class: "text" }, h("div", { class: "name" }, transfer.name), h("div", { class: "sub wrap" }, sub)),
+    h("div", { class: "side" }, side),
+  );
+}
+
+function transfers() {
+  if (!state.transfers.length) return null;
+  return h(
+    "section",
+    { class: "group" },
+    h("h2", {}, "Files"),
+    h("div", { class: "sheet" }, state.transfers.map(transferRow)),
+  );
+}
+
 function activity() {
   if (!state.activity.length) return null;
   return h(
@@ -421,7 +536,7 @@ function render() {
   const typing = active && active.id === "code-input";
   const caret = typing ? active.selectionStart : null;
 
-  root.replaceChildren(topBar(), devices(), activity() || "", foot());
+  root.replaceChildren(topBar(), transfers() || "", devices(), activity() || "", foot());
 
   if (typing) {
     const input = document.getElementById("code-input");
@@ -451,6 +566,44 @@ function lookNow() {
   invoke("look_now").catch(() => {});
 }
 
+// ---------- dragging files onto a device ----------
+
+/** The connected device under a point of the window, if any. */
+function deviceAt(position) {
+  // The position arrives in screen pixels; the page thinks in CSS pixels.
+  const scale = window.devicePixelRatio || 1;
+  const el = document.elementFromPoint(position.x / scale, position.y / scale);
+  const row = el && el.closest("[data-device]");
+  return row ? row.getAttribute("data-device") : null;
+}
+
+function watchFileDrops() {
+  const webview = window.__TAURI__.webview;
+  if (!webview) return;
+  webview.getCurrentWebview().onDragDropEvent((event) => {
+    const drag = event.payload;
+    let target = null;
+    if (drag.type === "over" || drag.type === "enter") {
+      target = deviceAt(drag.position);
+    } else if (drag.type === "drop") {
+      const device = deviceAt(drag.position);
+      if (device) {
+        for (const path of drag.paths) {
+          invoke("send_file", { deviceId: device, path }).catch((error) => {
+            ui.error = String(error);
+            render();
+          });
+        }
+      }
+    }
+    if (target !== ui.dropTarget) {
+      ui.dropTarget = target;
+      render();
+    }
+  });
+}
+
+watchFileDrops();
 listen("state-changed", refresh);
 // Coming back to the window is a good moment to look for devices.
 window.addEventListener("focus", lookNow);

@@ -15,7 +15,7 @@ use henos_clipboard_desktop::{ClipboardWatch, SystemClipboard};
 use henos_core::{
     clipboard::CAPABILITY as CLIPBOARD_CAPABILITY, ClipboardBackend, ClipboardContent,
     ClipboardEvent, ClipboardSync, DeviceInfo, FileKeyStore, Identity, NearbyDevice, Node,
-    NodeConfig, NodeEvent, PairedDevice, PairingTicket, TrustStore,
+    NodeConfig, NodeEvent, PairedDevice, PairingTicket, TransferEvent, TrustStore,
 };
 use tokio::{
     sync::{broadcast::error::RecvError, mpsc},
@@ -69,7 +69,44 @@ enum Command {
         /// simulated devices run on one computer.
         #[arg(long, value_name = "FILE")]
         clipboard_file: Option<PathBuf>,
+        /// Accept every file offered by a paired device and save it into
+        /// this folder. (The apps ask the person instead.)
+        #[arg(long, value_name = "FOLDER")]
+        receive_into: Option<PathBuf>,
+        /// Offer this file to each paired device as soon as it connects.
+        #[arg(long, value_name = "FILE")]
+        send: Option<PathBuf>,
     },
+}
+
+/// What the tool does with files, for testing transfers without the apps.
+struct Files {
+    receive_into: Option<PathBuf>,
+    send: Option<PathBuf>,
+}
+
+fn handle_files(node: &Arc<Node>, files: &Files, event: &NodeEvent) {
+    match event {
+        NodeEvent::PeerConnected(peer) => {
+            if let Some(path) = files.send.clone() {
+                let (node, to) = (node.clone(), peer.id);
+                tokio::spawn(async move {
+                    if let Err(e) = node.send_file(to, path).await {
+                        println!("file         could not be offered: {e}");
+                    }
+                });
+            }
+        }
+        NodeEvent::Transfer(TransferEvent::Offered { id, .. }) => match &files.receive_into {
+            Some(folder) => {
+                node.accept_file(*id, folder);
+            }
+            None => {
+                node.decline_file(*id);
+            }
+        },
+        _ => {}
+    }
 }
 
 enum ClipboardMode {
@@ -125,8 +162,11 @@ impl Device {
         let mut config = NodeConfig::new(self.identity, self.info, self.trust);
         config.discovery = discovery;
         if clipboard {
-            config.capabilities = vec![CLIPBOARD_CAPABILITY.to_owned()];
+            config.capabilities.push(CLIPBOARD_CAPABILITY.to_owned());
         }
+        config
+            .capabilities
+            .push(henos_core::transfer::CAPABILITY.to_owned());
         let node = Node::spawn(config).await?;
         println!(
             "device   {} ({})",
@@ -188,13 +228,16 @@ async fn main() -> Result<()> {
             run_for,
             clipboard,
             clipboard_file,
+            receive_into,
+            send,
         } => {
             let mode = match (clipboard, clipboard_file) {
                 (_, Some(file)) => ClipboardMode::File(file),
                 (true, None) => ClipboardMode::System,
                 (false, None) => ClipboardMode::Off,
             };
-            run(device, !no_discovery, run_for, mode).await
+            let files = Files { receive_into, send };
+            run(device, !no_discovery, run_for, mode, files).await
         }
     }
 }
@@ -204,6 +247,7 @@ async fn run(
     discovery: bool,
     run_for: Option<u64>,
     clipboard: ClipboardMode,
+    files: Files,
 ) -> Result<()> {
     let sharing = !matches!(clipboard, ClipboardMode::Off);
     let node = device.start(discovery, sharing).await?;
@@ -226,7 +270,10 @@ async fn run(
         tokio::select! {
             _ = &mut stop => break,
             event = events.recv() => match event {
-                Ok(event) => report(&node, event),
+                Ok(event) => {
+                    handle_files(&node, &files, &event);
+                    report(&node, event)
+                }
                 Err(RecvError::Lagged(_)) => continue,
                 Err(RecvError::Closed) => break,
             },
@@ -508,5 +555,22 @@ fn report(node: &Arc<Node>, event: NodeEvent) {
         NodeEvent::PairingAttemptFailed => println!("pairing      wrong code entered"),
         // Reported by the clipboard runtime, without the content.
         NodeEvent::ClipboardReceived(_) => {}
+        NodeEvent::Transfer(event) => match event {
+            TransferEvent::Offered { name, size, .. } => {
+                println!("file         offered: {name} ({size} bytes)")
+            }
+            TransferEvent::Sending { name, size, .. } => {
+                println!("file         offering {name} ({size} bytes)")
+            }
+            TransferEvent::Accepted { .. } => println!("file         accepted, transferring"),
+            TransferEvent::Progress { .. } => {}
+            TransferEvent::Finished {
+                path: Some(path), ..
+            } => {
+                println!("file         saved to {}", path.display())
+            }
+            TransferEvent::Finished { path: None, .. } => println!("file         delivered"),
+            TransferEvent::Failed { reason, .. } => println!("file         failed: {reason}"),
+        },
     }
 }

@@ -41,6 +41,7 @@ use crate::{
         decode, read_frame, write_frame, Control, Hello, Ready, StreamHeader, ALPN,
         MAX_CONTROL_FRAME, MAX_STREAM_HEADER, PROTOCOL_VERSION,
     },
+    transfer::{self, TransferEvent, Transfers},
     trust::{unix_now, PairedDevice, TrustStore},
 };
 
@@ -184,6 +185,8 @@ pub enum NodeEvent {
     /// A paired device sent a clipboard item. Handled by
     /// [`crate::clipboard::ClipboardSync`].
     ClipboardReceived(Arc<ClipboardItem>),
+    /// Something happened to a file transfer.
+    Transfer(TransferEvent),
 }
 
 /// Handle to the running node. Dropping it does not stop the node; call
@@ -207,6 +210,7 @@ struct Shared {
     nearby: Mutex<HashMap<DeviceId, NearbyEntry>>,
     dialing: Mutex<HashSet<DeviceId>>,
     greetings: Mutex<HashMap<DeviceId, GreetState>>,
+    transfers: Arc<Transfers>,
     /// The beacon socket, when beacons are on.
     beacon: Option<Arc<tokio::net::UdpSocket>>,
     /// Wakes the beacon sender for an immediate burst.
@@ -332,6 +336,7 @@ impl Node {
             nearby: Mutex::default(),
             dialing: Mutex::default(),
             greetings: Mutex::default(),
+            transfers: Arc::new(Transfers::new(events.clone())),
             beacon: beacon_socket,
             beacon_boost: tokio::sync::Notify::new(),
             beacon_replies: Mutex::default(),
@@ -586,6 +591,47 @@ impl Node {
         connect(&self.shared, addr).await
     }
 
+    /// Offers a file to a connected device. Returns the transfer's id; what
+    /// happens next arrives as [`NodeEvent::Transfer`] events.
+    pub async fn send_file(
+        &self,
+        to: DeviceId,
+        path: impl Into<std::path::PathBuf>,
+    ) -> Result<u64> {
+        let conn = {
+            let peers = self.shared.peers.lock().unwrap();
+            let handle = peers.get(&to).ok_or(Error::NotConnected(to))?;
+            if !handle
+                .peer
+                .capabilities
+                .iter()
+                .any(|c| c == transfer::CAPABILITY)
+            {
+                return Err(Error::Protocol(
+                    "the other device cannot receive files".into(),
+                ));
+            }
+            handle.conn.clone()
+        };
+        self.shared.transfers.send(conn, to, path.into()).await
+    }
+
+    /// Accepts an offered file and saves it into `folder`. Returns false if
+    /// the offer is no longer waiting.
+    pub fn accept_file(&self, id: u64, folder: impl Into<std::path::PathBuf>) -> bool {
+        self.shared.transfers.answer(id, Some(folder.into()))
+    }
+
+    /// Declines an offered file.
+    pub fn decline_file(&self, id: u64) -> bool {
+        self.shared.transfers.answer(id, None)
+    }
+
+    /// Stops a transfer that is waiting or under way.
+    pub fn cancel_transfer(&self, id: u64) {
+        self.shared.transfers.cancel(id);
+    }
+
     /// The features this device announces to peers.
     pub fn capabilities(&self) -> &[String] {
         &self.shared.capabilities
@@ -734,13 +780,7 @@ impl Shared {
             Some(old) => {
                 // Not closed right away: the other device may still be using
                 // it until it sees the `Ready` for the new one.
-                tokio::spawn(async move {
-                    // Hold the whole handle, not just the connection: its
-                    // session stops as soon as the handle is dropped.
-                    let old = old;
-                    tokio::time::sleep(REPLACED_LINGER).await;
-                    old.conn.close(close::REPLACED.into(), b"replaced");
-                });
+                retire(self.transfers.clone(), old);
                 Registered::Replaced
             }
         };
@@ -752,18 +792,19 @@ impl Shared {
     /// either order, so an announcement older than the one in use is ignored.
     fn register_as_follower(&self, handle: PeerHandle) -> Registered {
         let mut peers = self.peers.lock().unwrap();
-        let outcome = match peers.get(&handle.peer.id) {
+        if let Some(old) = peers.get(&handle.peer.id) {
+            if old.ready.instance == handle.ready.instance && old.ready.seq > handle.ready.seq {
+                return Registered::Rejected;
+            }
+        }
+        match peers.insert(handle.peer.id, handle) {
             None => Registered::New,
             Some(old) => {
-                if old.ready.instance == handle.ready.instance && old.ready.seq > handle.ready.seq {
-                    return Registered::Rejected;
-                }
-                old.conn.close(close::REPLACED.into(), b"replaced");
+                drop(peers);
+                retire(self.transfers.clone(), old);
                 Registered::Replaced
             }
-        };
-        peers.insert(handle.peer.id, handle);
-        outcome
+        }
     }
 
     /// Removes a session if it is still the current one for that device.
@@ -844,6 +885,22 @@ impl Shared {
             Err(e) => warn!("could not save the paired-device list: {e}"),
         }
     }
+}
+
+/// Closes a connection that has been replaced by a newer one, once nothing
+/// is using it any more: after a short wait for the other device to switch
+/// over, and never while a file is still moving on it.
+fn retire(transfers: Arc<Transfers>, old: PeerHandle) {
+    tokio::spawn(async move {
+        // Hold the whole handle, not just the connection: its session stops
+        // as soon as the handle is dropped.
+        let old = old;
+        tokio::time::sleep(REPLACED_LINGER).await;
+        while transfers.is_busy(old.conn.stable_id()) {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+        old.conn.close(close::REPLACED.into(), b"replaced");
+    });
 }
 
 /// Dials `addr` unless we are already connected to that device.
@@ -1122,6 +1179,41 @@ impl Session {
             })
         };
 
+        // Files are offered on streams of their own, each handled separately
+        // so a large file does not hold anything else up.
+        let offers = {
+            let (shared, conn) = (shared.clone(), conn.clone());
+            tokio::spawn(async move {
+                let conn_id = conn.stable_id();
+                while let Ok((send, mut recv)) = conn.accept_bi().await {
+                    let shared = shared.clone();
+                    tokio::spawn(async move {
+                        let header = timeout(STREAM_TIMEOUT, async {
+                            let body = read_frame(&mut recv, MAX_STREAM_HEADER).await.ok()??;
+                            decode::<StreamHeader>(&body).ok()
+                        })
+                        .await;
+                        match header {
+                            Ok(Some(StreamHeader::File(header)))
+                                if shared
+                                    .capabilities
+                                    .iter()
+                                    .any(|c| c == transfer::CAPABILITY) =>
+                            {
+                                shared
+                                    .transfers
+                                    .receive(peer_id, conn_id, header, send, recv)
+                                    .await;
+                            }
+                            _ => {
+                                debug!(peer = %peer_id.fmt_short(), "dropped an unexpected stream")
+                            }
+                        }
+                    });
+                }
+            })
+        };
+
         loop {
             tokio::select! {
                 body = incoming_rx.recv() => {
@@ -1153,6 +1245,7 @@ impl Session {
 
         reader.abort();
         streams.abort();
+        offers.abort();
         debug!(
             peer = %peer_id.fmt_short(),
             session = session_id,
@@ -1210,6 +1303,10 @@ async fn receive_stream(shared: &Shared, from: DeviceId, recv: &mut RecvStream) 
             shared.emit(NodeEvent::ClipboardReceived(Arc::new(item)));
             Ok(())
         }
+        // Files come on two-way streams, so the receiver can answer.
+        StreamHeader::File(_) => Err(Error::Protocol(
+            "file offered on the wrong kind of stream".into(),
+        )),
     }
 }
 

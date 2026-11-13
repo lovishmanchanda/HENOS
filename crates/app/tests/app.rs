@@ -273,3 +273,100 @@ async fn state_serialises_for_the_interface() {
     assert!(json["nearby"].as_array().unwrap().is_empty());
     desk.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_is_offered_accepted_and_saved() {
+    use henos_app::TransferStatus;
+
+    let (dir_a, dir_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (desk, _) = start(dir_a.path(), "Desk").await;
+    let (laptop, _) = start(dir_b.path(), "Laptop").await;
+    let shown = desk.start_pairing().unwrap();
+    laptop
+        .pair_with_ticket(&loopback_ticket(&desk, &shown.ticket))
+        .await
+        .unwrap();
+    until(&desk, "desk connected", |s| {
+        s.paired.len() == 1 && s.paired[0].connected
+    })
+    .await;
+    let laptop_state = until(&laptop, "laptop connected", |s| {
+        s.paired.len() == 1 && s.paired[0].connected
+    })
+    .await;
+
+    let source = dir_b.path().join("report.pdf");
+    std::fs::write(&source, vec![7u8; 200_000]).unwrap();
+    laptop
+        .send_file(&laptop_state.paired[0].id, &source)
+        .await
+        .unwrap();
+
+    // The desk is asked first; the laptop shows it is waiting.
+    let asked = until(&desk, "desk shows the offer", |s| {
+        s.transfers
+            .first()
+            .is_some_and(|t| t.status == TransferStatus::Offered)
+    })
+    .await;
+    let offer = &asked.transfers[0];
+    assert!(offer.incoming);
+    assert_eq!(
+        (offer.name.as_str(), offer.size, offer.device_name.as_str()),
+        ("report.pdf", 200_000, "Laptop")
+    );
+    assert_eq!(laptop.state().transfers[0].status, TransferStatus::Waiting);
+
+    desk.accept_file(offer.id).unwrap();
+    let done = until(&desk, "desk saved the file", |s| {
+        s.transfers
+            .first()
+            .is_some_and(|t| t.status == TransferStatus::Done)
+    })
+    .await;
+    let saved = done.transfers[0].detail.clone().expect("saved path shown");
+    assert!(saved.starts_with(desk.downloads_dir().to_str().unwrap()));
+    assert_eq!(std::fs::read(&saved).unwrap().len(), 200_000);
+    assert_eq!(done.activity[0].kind, ActivityKind::FileReceived);
+    assert_eq!(done.activity[0].text, "Received report.pdf from Laptop");
+    let sent = until(&laptop, "laptop heard it arrived", |s| {
+        s.transfers
+            .first()
+            .is_some_and(|t| t.status == TransferStatus::Done)
+    })
+    .await;
+    assert_eq!(sent.activity[0].text, "Sent report.pdf to Desk");
+
+    // Declining: the laptop is told, nothing new is saved.
+    laptop
+        .send_file(&laptop_state.paired[0].id, &source)
+        .await
+        .unwrap();
+    let asked = until(&desk, "second offer", |s| {
+        s.transfers
+            .first()
+            .is_some_and(|t| t.status == TransferStatus::Offered)
+    })
+    .await;
+    desk.decline_file(asked.transfers[0].id);
+    let refused = until(&laptop, "laptop told of the decline", |s| {
+        s.transfers
+            .first()
+            .is_some_and(|t| t.status == TransferStatus::Failed)
+    })
+    .await;
+    assert!(refused.transfers[0]
+        .detail
+        .as_deref()
+        .unwrap()
+        .contains("declined"));
+    assert_eq!(std::fs::read_dir(desk.downloads_dir()).unwrap().count(), 1);
+
+    // Finished entries can be cleared away.
+    let id = refused.transfers[0].id;
+    laptop.dismiss_transfer(id);
+    assert!(laptop.state().transfers.iter().all(|t| t.id != id));
+
+    desk.shutdown().await;
+    laptop.shutdown().await;
+}

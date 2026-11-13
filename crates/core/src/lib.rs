@@ -10,6 +10,7 @@
 //! - [`beacon`]: HENOS's own announce-and-answer discovery
 //! - [`node`]: discovery on the local network and encrypted connections
 //! - [`clipboard`]: shared clipboard between paired devices
+//! - [`transfer`]: sending files between paired devices
 //!
 //! Platform shells (Tauri, Android) stay thin: they supply the clipboard, the
 //! keychain and the UI, and call into this crate for the rest.
@@ -23,6 +24,7 @@ pub mod identity;
 pub mod node;
 pub mod pairing;
 pub mod protocol;
+pub mod transfer;
 pub mod trust;
 
 pub use clipboard::{
@@ -34,6 +36,7 @@ pub use identity::{DeviceId, FileKeyStore, Identity, KeyStore};
 pub use node::{NearbyDevice, Node, NodeConfig, NodeEvent, PairingOffer, Peer};
 pub use pairing::PairingTicket;
 pub use protocol::PROTOCOL_VERSION;
+pub use transfer::TransferEvent;
 pub use trust::{PairedDevice, TrustStore};
 
 /// Crate version, shown in the apps and the CLI.

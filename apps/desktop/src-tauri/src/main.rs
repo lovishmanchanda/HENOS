@@ -17,6 +17,7 @@ use tauri::{
     AppHandle, Emitter, Manager, RunEvent, State, WindowEvent, Wry,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
+use tauri_plugin_dialog::DialogExt as _;
 use tracing::{error, info};
 
 /// Passed when HENOS is started at login, so it opens without a window.
@@ -75,6 +76,57 @@ async fn unpair(running: State<'_, Running>, device_id: String) -> Result<(), St
 }
 
 #[tauri::command]
+async fn send_file(
+    running: State<'_, Running>,
+    device_id: String,
+    path: String,
+) -> Result<u64, String> {
+    running.henos.send_file(&device_id, path).await
+}
+
+/// Opens the system's file picker and offers the chosen files to a device.
+#[tauri::command]
+async fn pick_and_send(app: AppHandle, device_id: String) -> Result<(), String> {
+    let handle = app.clone();
+    app.dialog().file().pick_files(move |picked| {
+        let Some(picked) = picked else { return };
+        tauri::async_runtime::spawn(async move {
+            let running = handle.state::<Running>();
+            for file in picked {
+                let Ok(path) = file.into_path() else { continue };
+                if let Err(e) = running.henos.send_file(&device_id, path).await {
+                    error!("could not send the file: {e}");
+                }
+            }
+        });
+    });
+    Ok(())
+}
+
+#[tauri::command]
+async fn accept_file(running: State<'_, Running>, transfer_id: u64) -> Result<(), String> {
+    running.henos.accept_file(transfer_id)
+}
+
+#[tauri::command]
+async fn decline_file(running: State<'_, Running>, transfer_id: u64) -> Result<(), String> {
+    running.henos.decline_file(transfer_id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn cancel_transfer(running: State<'_, Running>, transfer_id: u64) -> Result<(), String> {
+    running.henos.cancel_transfer(transfer_id);
+    Ok(())
+}
+
+#[tauri::command]
+async fn dismiss_transfer(running: State<'_, Running>, transfer_id: u64) -> Result<(), String> {
+    running.henos.dismiss_transfer(transfer_id);
+    Ok(())
+}
+
+#[tauri::command]
 async fn look_now(running: State<'_, Running>) -> Result<(), String> {
     running.henos.look_now();
     Ok(())
@@ -112,6 +164,8 @@ fn show_main_window(app: &AppHandle) {
 fn start(app: &AppHandle) -> Result<(), String> {
     let mut config = AppConfig::new(data_dir(app)?);
     config.device_name = std::env::var("HENOS_DEVICE_NAME").ok();
+    // Accepted files go to a HENOS folder inside the person's Downloads.
+    config.downloads_dir = app.path().download_dir().ok().map(|dir| dir.join("HENOS"));
 
     let clipboard = Arc::new(SystemClipboard::new()?);
     let henos = tauri::async_runtime::block_on(Henos::start(config, clipboard))?;
@@ -235,6 +289,7 @@ fn main() {
             show_main_window(app);
         }))
         // When started at login HENOS gets this flag and stays in the tray.
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             Some(vec![HIDDEN_FLAG]),
@@ -268,6 +323,12 @@ fn main() {
             unpair,
             set_clipboard_paused,
             look_now,
+            send_file,
+            pick_and_send,
+            accept_file,
+            decline_file,
+            cancel_transfer,
+            dismiss_transfer,
         ])
         .build(tauri::generate_context!())
         .expect("error while building the HENOS app");

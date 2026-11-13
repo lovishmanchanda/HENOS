@@ -46,6 +46,8 @@ pub struct AppConfig {
     pub key_store: Option<Box<dyn KeyStore>>,
     /// Advertise on, and browse, the local network. Off only in tests.
     pub discovery: bool,
+    /// Where accepted files are saved. Defaults to `Received` in `data_dir`.
+    pub downloads_dir: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -55,6 +57,7 @@ impl AppConfig {
             device_name: None,
             key_store: None,
             discovery: true,
+            downloads_dir: None,
         }
     }
 }
@@ -72,6 +75,8 @@ pub struct AppState {
     /// The code we are showing, if we are in pairing mode.
     pub pairing: Option<PairingView>,
     pub clipboard_paused: bool,
+    /// Files being offered, sent or received, newest first.
+    pub transfers: Vec<TransferView>,
     /// Recent events, newest first. Never contains clipboard content.
     pub activity: Vec<Activity>,
 }
@@ -135,7 +140,41 @@ pub enum ActivityKind {
     PairingFailed,
     ClipboardSent,
     ClipboardReceived,
+    FileSent,
+    FileReceived,
 }
+
+/// One file being offered, sent or received.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferView {
+    pub id: u64,
+    pub device_id: String,
+    pub device_name: String,
+    pub name: String,
+    pub size: u64,
+    pub bytes: u64,
+    /// True for a file coming to this device.
+    pub incoming: bool,
+    pub status: TransferStatus,
+    /// Why it failed, or where it was saved.
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransferStatus {
+    /// Incoming, waiting for this device's person to accept or decline.
+    Offered,
+    /// Outgoing, waiting for the other device's person.
+    Waiting,
+    Active,
+    Done,
+    Failed,
+}
+
+/// How many finished transfers stay listed.
+const TRANSFER_LIMIT: usize = 12;
 
 struct ShownOffer {
     code: String,
@@ -153,6 +192,8 @@ pub struct App {
     activity: Mutex<VecDeque<Activity>>,
     /// Last known names, so a device can still be named after it is gone.
     names: Mutex<HashMap<DeviceId, String>>,
+    transfers: Mutex<Vec<TransferView>>,
+    downloads_dir: PathBuf,
     changes: broadcast::Sender<()>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -202,7 +243,13 @@ impl App {
             DeviceInfo::for_this_device(config.device_name),
             trust,
         );
-        node_config.capabilities = vec![CLIPBOARD_CAPABILITY.to_owned()];
+        node_config.capabilities = vec![
+            CLIPBOARD_CAPABILITY.to_owned(),
+            henos_core::transfer::CAPABILITY.to_owned(),
+        ];
+        let downloads_dir = config
+            .downloads_dir
+            .unwrap_or_else(|| config.data_dir.join("Received"));
         node_config.discovery = config.discovery;
         let node = Arc::new(Node::spawn(node_config).await.map_err(explain)?);
 
@@ -223,6 +270,8 @@ impl App {
             offer: Mutex::new(None),
             activity: Mutex::default(),
             names: Mutex::new(names),
+            transfers: Mutex::default(),
+            downloads_dir,
             changes,
             tasks: Mutex::default(),
         });
@@ -308,6 +357,7 @@ impl App {
             nearby: unpaired,
             pairing,
             clipboard_paused: self.paused.load(Ordering::Relaxed),
+            transfers: self.transfers.lock().unwrap().clone(),
             activity: self.activity.lock().unwrap().iter().cloned().collect(),
         }
     }
@@ -376,6 +426,133 @@ impl App {
 
     /// Looks for devices right away. Call when the person opens the app or
     /// the pairing screen, so they do not wait for the next routine check.
+    /// Offers a file to a connected paired device. The other person is asked
+    /// whether to accept it.
+    pub async fn send_file(&self, device_id: &str, path: impl Into<PathBuf>) -> Result<u64> {
+        let id = parse_id(device_id)?;
+        self.node.send_file(id, path).await.map_err(|e| match e {
+            henos_core::Error::NotConnected(_) => {
+                "That device is not connected right now.".to_owned()
+            }
+            other => explain(other),
+        })
+    }
+
+    /// Accepts an offered file; it is saved into the downloads folder.
+    pub fn accept_file(&self, transfer_id: u64) -> Result<()> {
+        if self.node.accept_file(transfer_id, &self.downloads_dir) {
+            Ok(())
+        } else {
+            Err("That file is no longer on offer.".into())
+        }
+    }
+
+    /// Declines an offered file. Nothing is saved.
+    pub fn decline_file(&self, transfer_id: u64) {
+        self.node.decline_file(transfer_id);
+    }
+
+    /// Stops a transfer that is waiting or under way.
+    pub fn cancel_transfer(&self, transfer_id: u64) {
+        self.node.cancel_transfer(transfer_id);
+    }
+
+    /// Removes a finished or failed transfer from the list.
+    pub fn dismiss_transfer(&self, transfer_id: u64) {
+        self.transfers.lock().unwrap().retain(|t| {
+            t.id != transfer_id
+                || !matches!(t.status, TransferStatus::Done | TransferStatus::Failed)
+        });
+        self.changed();
+    }
+
+    /// Where accepted files are saved.
+    pub fn downloads_dir(&self) -> &std::path::Path {
+        &self.downloads_dir
+    }
+
+    fn on_transfer(&self, event: henos_core::TransferEvent) {
+        use henos_core::TransferEvent as E;
+        let mut finished: Option<(ActivityKind, String)> = None;
+        {
+            let mut transfers = self.transfers.lock().unwrap();
+            let mut add = |id, device: DeviceId, name: String, size, incoming, status| {
+                transfers.insert(
+                    0,
+                    TransferView {
+                        id,
+                        device_id: device.to_string(),
+                        device_name: self.name_of(device),
+                        name,
+                        size,
+                        bytes: 0,
+                        incoming,
+                        status,
+                        detail: None,
+                    },
+                );
+            };
+            match event {
+                E::Offered {
+                    id,
+                    from,
+                    name,
+                    size,
+                } => add(id, from, name, size, true, TransferStatus::Offered),
+                E::Sending { id, to, name, size } => {
+                    add(id, to, name, size, false, TransferStatus::Waiting)
+                }
+                E::Accepted { id } => {
+                    if let Some(t) = transfers.iter_mut().find(|t| t.id == id) {
+                        t.status = TransferStatus::Active;
+                    }
+                }
+                E::Progress { id, bytes } => {
+                    if let Some(t) = transfers.iter_mut().find(|t| t.id == id) {
+                        t.bytes = bytes;
+                    }
+                }
+                E::Finished { id, path } => {
+                    if let Some(t) = transfers.iter_mut().find(|t| t.id == id) {
+                        t.status = TransferStatus::Done;
+                        t.bytes = t.size;
+                        t.detail = path.map(|p| p.display().to_string());
+                        finished = Some(if t.incoming {
+                            (
+                                ActivityKind::FileReceived,
+                                format!("Received {} from {}", t.name, t.device_name),
+                            )
+                        } else {
+                            (
+                                ActivityKind::FileSent,
+                                format!("Sent {} to {}", t.name, t.device_name),
+                            )
+                        });
+                    }
+                }
+                E::Failed { id, reason } => {
+                    if let Some(t) = transfers.iter_mut().find(|t| t.id == id) {
+                        t.status = TransferStatus::Failed;
+                        t.detail = Some(reason);
+                    }
+                }
+            }
+            // Keep the list short: drop the oldest finished ones.
+            let mut settled = 0;
+            transfers.retain(|t| {
+                if matches!(t.status, TransferStatus::Done | TransferStatus::Failed) {
+                    settled += 1;
+                    settled <= TRANSFER_LIMIT
+                } else {
+                    true
+                }
+            });
+        }
+        if let Some((kind, text)) = finished {
+            self.log(kind, text);
+        }
+    }
+
     pub fn look_now(&self) {
         self.node.look_now();
     }
@@ -503,6 +680,7 @@ async fn watch_node(app: Weak<App>, mut events: broadcast::Receiver<NodeEvent>) 
             NodeEvent::PeerConnected(peer) => app.remember_name(peer.id, &peer.device.name),
             // Reported through the clipboard events instead.
             NodeEvent::ClipboardReceived(_) => continue,
+            NodeEvent::Transfer(event) => app.on_transfer(event),
             NodeEvent::NearbyFound(_)
             | NodeEvent::NearbyLost(_)
             | NodeEvent::PeerDisconnected(_) => {}

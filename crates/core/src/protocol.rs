@@ -89,6 +89,7 @@ pub const MAX_STREAM_HEADER: usize = 1024;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum StreamHeader {
     Clipboard(crate::clipboard::ClipboardHeader),
+    File(crate::transfer::FileHeader),
 }
 
 /// Encodes `msg` and writes it as one frame.

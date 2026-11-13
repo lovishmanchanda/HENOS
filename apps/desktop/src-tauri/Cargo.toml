@@ -17,6 +17,7 @@ tracing-subscriber = "0.3.23"
 tokio = { version = "1.54.1", features = ["sync", "rt"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

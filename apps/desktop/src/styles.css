@@ -254,6 +254,35 @@ h1 {
   color: var(--soft);
 }
 
+.row.dropping {
+  background: var(--accent-wash);
+}
+
+.row.failed .sub {
+  color: var(--danger);
+}
+
+.row .sub.wrap {
+  flex-wrap: wrap;
+  row-gap: 5px;
+}
+
+/* Progress of a file on its way. */
+.bar {
+  flex-basis: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
 /* A row that acts: "Add a device". */
 button.row {
   width: 100%;
